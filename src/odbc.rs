@@ -1,4 +1,4 @@
-#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::missing_safety_doc, clippy::manual_dangling_ptr)]
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn SQLAllocHandle(
     unsafe {
         match handle_type {
             SQL_HANDLE_ENV => {
-                *output_handle = 1 as *mut c_void;
+                *output_handle = std::ptr::dangling_mut::<c_void>();
                 SQL_SUCCESS
             }
             SQL_HANDLE_DBC => {

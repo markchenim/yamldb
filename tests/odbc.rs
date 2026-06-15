@@ -153,10 +153,12 @@ fn test_odbc_comparison_query() {
         SQLAllocHandle(SQL_HANDLE_STMT, dbc, &mut stmt);
 
         let dsn = cstr(path);
-        SQLConnect(dbc, dsn.as_ptr(), -1, ptr::null(), -1, ptr::null(), -1);
+        let conn_ret = SQLConnect(dbc, dsn.as_ptr(), -1, ptr::null(), -1, ptr::null(), -1);
+        assert_eq!(conn_ret, SQL_SUCCESS, "SQLConnect should succeed for {}", path);
 
         let query = cstr("SELECT * FROM data WHERE age > 28");
-        assert_eq!(SQLExecDirect(stmt, query.as_ptr(), -1), SQL_SUCCESS);
+        let exec_ret = SQLExecDirect(stmt, query.as_ptr(), -1);
+        assert_eq!(exec_ret, SQL_SUCCESS, "SQLExecDirect should succeed");
 
         let mut row_count: c_int = 0;
         SQLRowCount(stmt, &mut row_count);

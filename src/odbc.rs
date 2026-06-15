@@ -165,11 +165,11 @@ pub unsafe extern "C" fn SQLAllocHandle(
             }
             SQL_HANDLE_DBC => {
                 let id = slot_alloc(&DBC_STORE, SqlDbcEntry { db: None });
-                *output_handle = id as *mut c_void;
+                *output_handle = (id + 1) as *mut c_void;
                 SQL_SUCCESS
             }
             SQL_HANDLE_STMT => {
-                let dbc_id = input_handle as usize;
+                let dbc_id = (input_handle as usize).saturating_sub(1);
                 let entry = SqlStmtEntry {
                     dbc_id,
                     results: Vec::new(),
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn SQLAllocHandle(
                     columns: Vec::new(),
                 };
                 let id = slot_alloc(&STMT_STORE, entry);
-                *output_handle = id as *mut c_void;
+                *output_handle = (id + 1) as *mut c_void;
                 SQL_SUCCESS
             }
             _ => SQL_ERROR,
@@ -190,7 +190,7 @@ pub unsafe extern "C" fn SQLFreeHandle(handle_type: c_int, handle: *mut c_void) 
     if handle.is_null() {
         return SQL_ERROR;
     }
-    let id = handle as usize;
+    let id = (handle as usize).saturating_sub(1);
     match handle_type {
         SQL_HANDLE_ENV => SQL_SUCCESS,
         SQL_HANDLE_DBC => {
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn SQLConnect(
             Err(_) => return SQL_ERROR,
         };
         let path = parse_dsn(dsn).unwrap_or_else(|| dsn.to_string());
-        let id = connection_handle as usize;
+        let id = (connection_handle as usize).saturating_sub(1);
         let mut v = DBC_STORE.lock().unwrap();
         let entry = match v.get_mut(id).and_then(|e| e.as_mut()) {
             Some(e) => e,
@@ -252,7 +252,7 @@ pub unsafe extern "C" fn SQLDisconnect(connection_handle: *mut c_void) -> c_int 
     if connection_handle.is_null() {
         return SQL_ERROR;
     }
-    let id = connection_handle as usize;
+    let id = (connection_handle as usize).saturating_sub(1);
     let mut v = DBC_STORE.lock().unwrap();
     match v.get_mut(id).and_then(|e| e.as_mut()) {
         Some(entry) => {
@@ -278,7 +278,7 @@ pub unsafe extern "C" fn SQLExecDirect(
             Err(_) => return SQL_ERROR,
         };
 
-        let stmt_id = statement_handle as usize;
+        let stmt_id = (statement_handle as usize).saturating_sub(1);
 
         let query_op = match parse_query(query) {
             Some(op) => op,
@@ -333,7 +333,7 @@ pub unsafe extern "C" fn SQLFetch(statement_handle: *mut c_void) -> c_int {
     if statement_handle.is_null() {
         return SQL_ERROR;
     }
-    let id = statement_handle as usize;
+    let id = (statement_handle as usize).saturating_sub(1);
     let mut v = STMT_STORE.lock().unwrap();
     match v.get_mut(id).and_then(|e| e.as_mut()) {
         Some(stmt) => {
@@ -361,7 +361,7 @@ pub unsafe extern "C" fn SQLGetData(
         if statement_handle.is_null() || target_value.is_null() || buffer_length <= 0 {
             return SQL_ERROR;
         }
-        let id = statement_handle as usize;
+        let id = (statement_handle as usize).saturating_sub(1);
         let v = STMT_STORE.lock().unwrap();
         let stmt = match v.get(id).and_then(|e| e.as_ref()) {
             Some(s) => s,
@@ -395,7 +395,7 @@ pub unsafe extern "C" fn SQLNumResultCols(
         if statement_handle.is_null() || column_count.is_null() {
             return SQL_ERROR;
         }
-        let id = statement_handle as usize;
+        let id = (statement_handle as usize).saturating_sub(1);
         let v = STMT_STORE.lock().unwrap();
         match v.get(id).and_then(|e| e.as_ref()) {
             Some(stmt) => {
@@ -423,7 +423,7 @@ pub unsafe extern "C" fn SQLDescribeCol(
         if statement_handle.is_null() || column_name.is_null() || buffer_length <= 0 {
             return SQL_ERROR;
         }
-        let id = statement_handle as usize;
+        let id = (statement_handle as usize).saturating_sub(1);
         let v = STMT_STORE.lock().unwrap();
         let stmt = match v.get(id).and_then(|e| e.as_ref()) {
             Some(s) => s,
@@ -454,7 +454,7 @@ pub unsafe extern "C" fn SQLRowCount(
         if statement_handle.is_null() || row_count.is_null() {
             return SQL_ERROR;
         }
-        let id = statement_handle as usize;
+        let id = (statement_handle as usize).saturating_sub(1);
         let v = STMT_STORE.lock().unwrap();
         match v.get(id).and_then(|e| e.as_ref()) {
             Some(stmt) => {
@@ -480,7 +480,7 @@ pub unsafe extern "C" fn SQLColAttribute(
         if statement_handle.is_null() {
             return SQL_ERROR;
         }
-        let id = statement_handle as usize;
+        let id = (statement_handle as usize).saturating_sub(1);
         let v = STMT_STORE.lock().unwrap();
         if v.get(id).and_then(|e| e.as_ref()).is_none() {
             return SQL_ERROR;

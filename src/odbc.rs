@@ -143,7 +143,7 @@ unsafe fn write_bytes(dst: *mut c_char, buf_len: c_int, src: &[u8]) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLAllocHandle(
     handle_type: c_int,
     input_handle: *mut c_void,
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn SQLAllocHandle(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLFreeHandle(handle_type: c_int, handle: *mut c_void) -> c_int {
     let id = handle as usize;
     match handle_type {
@@ -200,7 +200,7 @@ pub unsafe extern "C" fn SQLFreeHandle(handle_type: c_int, handle: *mut c_void) 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLConnect(
     connection_handle: *mut c_void,
     server_name: *const c_char,
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn SQLConnect(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLDisconnect(connection_handle: *mut c_void) -> c_int {
     let id = connection_handle as usize;
     let mut v = DBC_STORE.lock().unwrap();
@@ -246,7 +246,7 @@ pub unsafe extern "C" fn SQLDisconnect(connection_handle: *mut c_void) -> c_int 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLExecDirect(
     statement_handle: *mut c_void,
     statement_text: *const c_char,
@@ -308,7 +308,7 @@ pub unsafe extern "C" fn SQLExecDirect(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLFetch(statement_handle: *mut c_void) -> c_int {
     let id = statement_handle as usize;
     let mut v = STMT_STORE.lock().unwrap();
@@ -325,7 +325,7 @@ pub unsafe extern "C" fn SQLFetch(statement_handle: *mut c_void) -> c_int {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLGetData(
     statement_handle: *mut c_void,
     column_number: c_int,
@@ -363,7 +363,7 @@ pub unsafe extern "C" fn SQLGetData(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLNumResultCols(
     statement_handle: *mut c_void,
     column_count: *mut c_int,
@@ -384,7 +384,7 @@ pub unsafe extern "C" fn SQLNumResultCols(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLDescribeCol(
     statement_handle: *mut c_void,
     column_number: c_int,
@@ -422,7 +422,7 @@ pub unsafe extern "C" fn SQLDescribeCol(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLRowCount(
     statement_handle: *mut c_void,
     row_count: *mut c_int,
@@ -443,7 +443,7 @@ pub unsafe extern "C" fn SQLRowCount(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLColAttribute(
     statement_handle: *mut c_void,
     _column_number: c_int,

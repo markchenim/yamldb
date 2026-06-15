@@ -112,9 +112,7 @@ fn parse_single_condition(condition: &str) -> Option<QueryOp> {
             } else if let Ok(n) = value.parse::<i64>() {
                 serde_yaml::Value::Number(n.into())
             } else if let Ok(f) = value.parse::<f64>() {
-                serde_yaml::Value::Number(
-                    serde_yaml::Number::from(f)
-                )
+                serde_yaml::Value::Number(serde_yaml::Number::from(f))
             } else {
                 serde_yaml::Value::String(value.to_string())
             };
@@ -140,39 +138,41 @@ pub unsafe extern "C" fn SQLAllocHandle(
     input_handle: *mut c_void,
     output_handle: *mut *mut c_void,
 ) -> c_int {
-    match handle_type {
-        SQL_HANDLE_ENV => {
-            let env = Box::new(SqlEnv { handle_type });
-            let mut envs = ENVIRONMENTS.lock().unwrap();
-            envs.push(env);
-            *output_handle = envs.last_mut().unwrap().as_mut() as *mut _ as *mut c_void;
-            SQL_SUCCESS
+    unsafe {
+        match handle_type {
+            SQL_HANDLE_ENV => {
+                let env = Box::new(SqlEnv { handle_type });
+                let mut envs = ENVIRONMENTS.lock().unwrap();
+                envs.push(env);
+                *output_handle = envs.last_mut().unwrap().as_mut() as *mut _ as *mut c_void;
+                SQL_SUCCESS
+            }
+            SQL_HANDLE_DBC => {
+                let dbc = Box::new(SqlDbc {
+                    handle_type,
+                    db: None,
+                });
+                let mut conns = CONNECTIONS.lock().unwrap();
+                conns.push(dbc);
+                *output_handle = conns.last_mut().unwrap().as_mut() as *mut _ as *mut c_void;
+                SQL_SUCCESS
+            }
+            SQL_HANDLE_STMT => {
+                let dbc_handle = input_handle as *mut SqlDbc;
+                let stmt = Box::new(SqlStmt {
+                    handle_type,
+                    dbc: dbc_handle,
+                    results: Vec::new(),
+                    current_row: 0,
+                    columns: Vec::new(),
+                });
+                let mut stmts = STATEMENTS.lock().unwrap();
+                stmts.push(stmt);
+                *output_handle = stmts.last_mut().unwrap().as_mut() as *mut _ as *mut c_void;
+                SQL_SUCCESS
+            }
+            _ => SQL_ERROR,
         }
-        SQL_HANDLE_DBC => {
-            let dbc = Box::new(SqlDbc {
-                handle_type,
-                db: None,
-            });
-            let mut conns = CONNECTIONS.lock().unwrap();
-            conns.push(dbc);
-            *output_handle = conns.last_mut().unwrap().as_mut() as *mut _ as *mut c_void;
-            SQL_SUCCESS
-        }
-        SQL_HANDLE_STMT => {
-            let dbc_handle = input_handle as *mut SqlDbc;
-            let stmt = Box::new(SqlStmt {
-                handle_type,
-                dbc: dbc_handle,
-                results: Vec::new(),
-                current_row: 0,
-                columns: Vec::new(),
-            });
-            let mut stmts = STATEMENTS.lock().unwrap();
-            stmts.push(stmt);
-            *output_handle = stmts.last_mut().unwrap().as_mut() as *mut _ as *mut c_void;
-            SQL_SUCCESS
-        }
-        _ => SQL_ERROR,
     }
 }
 
@@ -211,24 +211,26 @@ pub unsafe extern "C" fn SQLConnect(
     _authentication: *const c_char,
     _name_length3: c_int,
 ) -> c_int {
-    if server_name.is_null() {
-        return SQL_ERROR;
-    }
-    
-    let dsn = match CStr::from_ptr(server_name).to_str() {
-        Ok(s) => s,
-        Err(_) => return SQL_ERROR,
-    };
-    
-    let path = parse_dsn(dsn).unwrap_or_else(|| dsn.to_string());
-    
-    let mut db = YamlDb::new(&path);
-    match db.load() {
-        Ok(_) => {
-            (*connection_handle).db = Some(Mutex::new(db));
-            SQL_SUCCESS
+    unsafe {
+        if server_name.is_null() {
+            return SQL_ERROR;
         }
-        Err(_) => SQL_ERROR,
+        
+        let dsn = match CStr::from_ptr(server_name).to_str() {
+            Ok(s) => s,
+            Err(_) => return SQL_ERROR,
+        };
+        
+        let path = parse_dsn(dsn).unwrap_or_else(|| dsn.to_string());
+        
+        let mut db = YamlDb::new(&path);
+        match db.load() {
+            Ok(_) => {
+                (*connection_handle).db = Some(Mutex::new(db));
+                SQL_SUCCESS
+            }
+            Err(_) => SQL_ERROR,
+        }
     }
 }
 
@@ -236,11 +238,13 @@ pub unsafe extern "C" fn SQLConnect(
 pub unsafe extern "C" fn SQLDisconnect(
     connection_handle: *mut SqlDbc,
 ) -> c_int {
-    if connection_handle.is_null() {
-        return SQL_ERROR;
+    unsafe {
+        if connection_handle.is_null() {
+            return SQL_ERROR;
+        }
+        (*connection_handle).db = None;
+        SQL_SUCCESS
     }
-    (*connection_handle).db = None;
-    SQL_SUCCESS
 }
 
 #[no_mangle]
@@ -249,63 +253,67 @@ pub unsafe extern "C" fn SQLExecDirect(
     statement_text: *const c_char,
     _text_length: c_int,
 ) -> c_int {
-    if statement_handle.is_null() || statement_text.is_null() {
-        return SQL_ERROR;
+    unsafe {
+        if statement_handle.is_null() || statement_text.is_null() {
+            return SQL_ERROR;
+        }
+        
+        let query = match CStr::from_ptr(statement_text).to_str() {
+            Ok(s) => s,
+            Err(_) => return SQL_ERROR,
+        };
+        
+        let dbc = (*statement_handle).dbc;
+        if dbc.is_null() {
+            return SQL_ERROR;
+        }
+        
+        let db = match &(*dbc).db {
+            Some(db) => db,
+            None => return SQL_ERROR,
+        };
+        
+        let db = db.lock().unwrap();
+        let query_op = match parse_query(query) {
+            Some(op) => op,
+            None => return SQL_ERROR,
+        };
+        
+        let result = db.query(&query_op);
+        let records: Vec<Record> = result.to_vec().into_iter().cloned().collect();
+        
+        let columns = if let Some(first) = records.first() {
+            let mut cols: Vec<String> = first.data.keys().cloned().collect();
+            cols.sort();
+            cols
+        } else {
+            Vec::new()
+        };
+        
+        (*statement_handle).results = records;
+        (*statement_handle).current_row = 0;
+        (*statement_handle).columns = columns;
+        
+        SQL_SUCCESS
     }
-    
-    let query = match CStr::from_ptr(statement_text).to_str() {
-        Ok(s) => s,
-        Err(_) => return SQL_ERROR,
-    };
-    
-    let dbc = (*statement_handle).dbc;
-    if dbc.is_null() {
-        return SQL_ERROR;
-    }
-    
-    let db = match &(*dbc).db {
-        Some(db) => db,
-        None => return SQL_ERROR,
-    };
-    
-    let db = db.lock().unwrap();
-    let query_op = match parse_query(query) {
-        Some(op) => op,
-        None => return SQL_ERROR,
-    };
-    
-    let result = db.query(&query_op);
-    let records: Vec<Record> = result.to_vec().into_iter().cloned().collect();
-    
-    let columns = if let Some(first) = records.first() {
-        let mut cols: Vec<String> = first.data.keys().cloned().collect();
-        cols.sort();
-        cols
-    } else {
-        Vec::new()
-    };
-    
-    (*statement_handle).results = records;
-    (*statement_handle).current_row = 0;
-    (*statement_handle).columns = columns;
-    
-    SQL_SUCCESS
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn SQLFetch(
     statement_handle: *mut SqlStmt,
 ) -> c_int {
-    if statement_handle.is_null() {
-        return SQL_ERROR;
-    }
-    
-    let stmt = &mut *statement_handle;
-    if stmt.current_row < stmt.results.len() {
-        stmt.current_row += 1;
-        SQL_SUCCESS
-    } else {
-        SQL_NO_DATA
+    unsafe {
+        if statement_handle.is_null() {
+            return SQL_ERROR;
+        }
+        
+        let stmt = &mut *statement_handle;
+        if stmt.current_row < stmt.results.len() {
+            stmt.current_row += 1;
+            SQL_SUCCESS
+        } else {
+            SQL_NO_DATA
+        }
     }
 }
 
@@ -318,49 +326,51 @@ pub unsafe extern "C" fn SQLGetData(
     buffer_length: c_int,
     strlen_or_ind: *mut c_int,
 ) -> c_int {
-    if statement_handle.is_null() || target_value.is_null() || buffer_length <= 0 {
-        return SQL_ERROR;
+    unsafe {
+        if statement_handle.is_null() || target_value.is_null() || buffer_length <= 0 {
+            return SQL_ERROR;
+        }
+        
+        let stmt = &*statement_handle;
+        if stmt.current_row == 0 || stmt.current_row > stmt.results.len() {
+            return SQL_ERROR;
+        }
+        
+        let row_idx = stmt.current_row - 1;
+        let col_idx = (column_number - 1) as usize;
+        
+        if col_idx >= stmt.columns.len() {
+            return SQL_ERROR;
+        }
+        
+        let record = &stmt.results[row_idx];
+        let col_name = &stmt.columns[col_idx];
+        
+        let value = record
+            .data
+            .get(col_name)
+            .map(|v| match v {
+                serde_yaml::Value::String(s) => s.clone(),
+                serde_yaml::Value::Number(n) => n.to_string(),
+                serde_yaml::Value::Bool(b) => b.to_string(),
+                serde_yaml::Value::Null => "NULL".to_string(),
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+        
+        let bytes = value.as_bytes();
+        let max_copy = (buffer_length - 1) as usize;
+        let copy_len = std::cmp::min(bytes.len(), max_copy);
+        
+        ptr::copy_nonoverlapping(bytes.as_ptr(), target_value as *mut u8, copy_len);
+        *target_value.add(copy_len) = 0;
+        
+        if !strlen_or_ind.is_null() {
+            *strlen_or_ind = bytes.len() as c_int;
+        }
+        
+        SQL_SUCCESS
     }
-    
-    let stmt = &*statement_handle;
-    if stmt.current_row == 0 || stmt.current_row > stmt.results.len() {
-        return SQL_ERROR;
-    }
-    
-    let row_idx = stmt.current_row - 1;
-    let col_idx = (column_number - 1) as usize;
-    
-    if col_idx >= stmt.columns.len() {
-        return SQL_ERROR;
-    }
-    
-    let record = &stmt.results[row_idx];
-    let col_name = &stmt.columns[col_idx];
-    
-    let value = record
-        .data
-        .get(col_name)
-        .map(|v| match v {
-            serde_yaml::Value::String(s) => s.clone(),
-            serde_yaml::Value::Number(n) => n.to_string(),
-            serde_yaml::Value::Bool(b) => b.to_string(),
-            serde_yaml::Value::Null => "NULL".to_string(),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
-    
-    let bytes = value.as_bytes();
-    let max_copy = (buffer_length - 1) as usize;
-    let copy_len = std::cmp::min(bytes.len(), max_copy);
-    
-    ptr::copy_nonoverlapping(bytes.as_ptr(), target_value as *mut u8, copy_len);
-    *target_value.add(copy_len) = 0;
-    
-    if !strlen_or_ind.is_null() {
-        *strlen_or_ind = bytes.len() as c_int;
-    }
-    
-    SQL_SUCCESS
 }
 
 #[no_mangle]
@@ -368,12 +378,14 @@ pub unsafe extern "C" fn SQLNumResultCols(
     statement_handle: *mut SqlStmt,
     column_count: *mut c_int,
 ) -> c_int {
-    if statement_handle.is_null() || column_count.is_null() {
-        return SQL_ERROR;
+    unsafe {
+        if statement_handle.is_null() || column_count.is_null() {
+            return SQL_ERROR;
+        }
+        
+        *column_count = (*statement_handle).columns.len() as c_int;
+        SQL_SUCCESS
     }
-    
-    *column_count = (*statement_handle).columns.len() as c_int;
-    SQL_SUCCESS
 }
 
 #[no_mangle]
@@ -388,34 +400,36 @@ pub unsafe extern "C" fn SQLDescribeCol(
     _decimal_digits: *mut c_int,
     _nullable: *mut c_int,
 ) -> c_int {
-    if statement_handle.is_null() || column_name.is_null() || buffer_length <= 0 {
-        return SQL_ERROR;
+    unsafe {
+        if statement_handle.is_null() || column_name.is_null() || buffer_length <= 0 {
+            return SQL_ERROR;
+        }
+        
+        let stmt = &*statement_handle;
+        let col_idx = (column_number - 1) as usize;
+        
+        if col_idx >= stmt.columns.len() {
+            return SQL_ERROR;
+        }
+        
+        let name = &stmt.columns[col_idx];
+        let bytes = name.as_bytes();
+        let max_copy = (buffer_length - 1) as usize;
+        let copy_len = std::cmp::min(bytes.len(), max_copy);
+        
+        ptr::copy_nonoverlapping(bytes.as_ptr(), column_name as *mut u8, copy_len);
+        *column_name.add(copy_len) = 0;
+        
+        if !name_length.is_null() {
+            *name_length = bytes.len() as c_int;
+        }
+        
+        if !data_type.is_null() {
+            *data_type = SQL_VARCHAR;
+        }
+        
+        SQL_SUCCESS
     }
-    
-    let stmt = &*statement_handle;
-    let col_idx = (column_number - 1) as usize;
-    
-    if col_idx >= stmt.columns.len() {
-        return SQL_ERROR;
-    }
-    
-    let name = &stmt.columns[col_idx];
-    let bytes = name.as_bytes();
-    let max_copy = (buffer_length - 1) as usize;
-    let copy_len = std::cmp::min(bytes.len(), max_copy);
-    
-    ptr::copy_nonoverlapping(bytes.as_ptr(), column_name as *mut u8, copy_len);
-    *column_name.add(copy_len) = 0;
-    
-    if !name_length.is_null() {
-        *name_length = bytes.len() as c_int;
-    }
-    
-    if !data_type.is_null() {
-        *data_type = SQL_VARCHAR;
-    }
-    
-    SQL_SUCCESS
 }
 
 #[no_mangle]
@@ -423,12 +437,14 @@ pub unsafe extern "C" fn SQLRowCount(
     statement_handle: *mut SqlStmt,
     row_count: *mut c_int,
 ) -> c_int {
-    if statement_handle.is_null() || row_count.is_null() {
-        return SQL_ERROR;
+    unsafe {
+        if statement_handle.is_null() || row_count.is_null() {
+            return SQL_ERROR;
+        }
+        
+        *row_count = (*statement_handle).results.len() as c_int;
+        SQL_SUCCESS
     }
-    
-    *row_count = (*statement_handle).results.len() as c_int;
-    SQL_SUCCESS
 }
 
 #[no_mangle]
@@ -441,20 +457,22 @@ pub unsafe extern "C" fn SQLColAttribute(
     _string_length: *mut c_int,
     numeric_attribute: *mut c_int,
 ) -> c_int {
-    if statement_handle.is_null() {
-        return SQL_ERROR;
+    unsafe {
+        if statement_handle.is_null() {
+            return SQL_ERROR;
+        }
+        
+        let stmt = &*statement_handle;
+        let col_idx = (column_number - 1) as usize;
+        
+        if col_idx >= stmt.columns.len() {
+            return SQL_ERROR;
+        }
+        
+        if !numeric_attribute.is_null() {
+            *numeric_attribute = 256;
+        }
+        
+        SQL_SUCCESS
     }
-    
-    let stmt = &*statement_handle;
-    let col_idx = (column_number - 1) as usize;
-    
-    if col_idx >= stmt.columns.len() {
-        return SQL_ERROR;
-    }
-    
-    if !numeric_attribute.is_null() {
-        *numeric_attribute = 256;
-    }
-    
-    SQL_SUCCESS
 }

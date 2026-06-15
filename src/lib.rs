@@ -312,12 +312,12 @@ impl YamlDb {
         Ok(count)
     }
 
-    pub fn query(&self, op: &QueryOp) -> QueryResult {
+    pub fn query(&self, op: &QueryOp) -> QueryResult<'_> {
         let records: Vec<&Record> = self.records.values().filter(|r| op.matches(r)).collect();
         QueryResult { records }
     }
 
-    pub fn find_where<F>(&self, filter: F) -> QueryResult
+    pub fn find_where<F>(&self, filter: F) -> QueryResult<'_>
     where
         F: Fn(&Record) -> bool,
     {

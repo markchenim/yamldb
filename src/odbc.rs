@@ -60,27 +60,33 @@ fn parse_dsn(dsn: &str) -> Option<String> {
 }
 
 fn parse_query(query: &str) -> Option<QueryOp> {
-    let q = query.trim().to_lowercase();
-    if !q.starts_with("select") {
+    let q = query.trim();
+    let lower = q.to_lowercase();
+    if !lower.starts_with("select") {
         return None;
     }
-    if !q.contains("where") {
+    if !lower.contains("where") {
         return Some(QueryOp::and(vec![]));
     }
-    let parts: Vec<&str> = q.splitn(2, "where").collect();
-    if parts.len() != 2 {
-        return Some(QueryOp::and(vec![]));
-    }
-    parse_condition(parts[1].trim())
+    let idx = lower.find("where").unwrap();
+    let cond_part = &q[idx + 5..];
+    parse_condition(cond_part.trim())
 }
 
 fn parse_condition(cond: &str) -> Option<QueryOp> {
     let cond = cond.trim();
-    if cond.contains(" and ") {
-        let ops: Vec<QueryOp> = cond.split(" and ").filter_map(|p| parse_cmp(p.trim())).collect();
+    let lower = cond.to_lowercase();
+    if lower.contains(" and ") {
+        let idx = lower.find(" and ").unwrap();
+        let left = &cond[..idx];
+        let right = &cond[idx + 5..];
+        let ops: Vec<QueryOp> = [left, right].iter().filter_map(|p| parse_cmp(p.trim())).collect();
         Some(QueryOp::and(ops))
-    } else if cond.contains(" or ") {
-        let ops: Vec<QueryOp> = cond.split(" or ").filter_map(|p| parse_cmp(p.trim())).collect();
+    } else if lower.contains(" or ") {
+        let idx = lower.find(" or ").unwrap();
+        let left = &cond[..idx];
+        let right = &cond[idx + 4..];
+        let ops: Vec<QueryOp> = [left, right].iter().filter_map(|p| parse_cmp(p.trim())).collect();
         Some(QueryOp::or(ops))
     } else {
         parse_cmp(cond)
@@ -91,7 +97,7 @@ fn parse_cmp(s: &str) -> Option<QueryOp> {
     let s = s.trim();
     for sym in &[">=", "<=", "!=", "=", ">", "<"] {
         if let Some(idx) = s.find(*sym) {
-            let key = s[..idx].trim().to_string();
+            let key = s[..idx].trim().to_lowercase();
             let val = s[idx + sym.len()..].trim();
             let v = if val.starts_with('\'') && val.ends_with('\'') {
                 serde_yaml::Value::String(val[1..val.len() - 1].to_string())
@@ -181,6 +187,9 @@ pub unsafe extern "C" fn SQLAllocHandle(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLFreeHandle(handle_type: c_int, handle: *mut c_void) -> c_int {
+    if handle.is_null() {
+        return SQL_ERROR;
+    }
     let id = handle as usize;
     match handle_type {
         SQL_HANDLE_ENV => SQL_SUCCESS,
@@ -213,6 +222,9 @@ pub unsafe extern "C" fn SQLConnect(
     _nl3: c_int,
 ) -> c_int {
     unsafe {
+        if connection_handle.is_null() || server_name.is_null() {
+            return SQL_ERROR;
+        }
         let dsn = match cstr_to_str(server_name) {
             Ok(s) => s,
             Err(_) => return SQL_ERROR,
@@ -237,6 +249,9 @@ pub unsafe extern "C" fn SQLConnect(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLDisconnect(connection_handle: *mut c_void) -> c_int {
+    if connection_handle.is_null() {
+        return SQL_ERROR;
+    }
     let id = connection_handle as usize;
     let mut v = DBC_STORE.lock().unwrap();
     match v.get_mut(id).and_then(|e| e.as_mut()) {
@@ -255,6 +270,9 @@ pub unsafe extern "C" fn SQLExecDirect(
     _text_length: c_int,
 ) -> c_int {
     unsafe {
+        if statement_handle.is_null() || statement_text.is_null() {
+            return SQL_ERROR;
+        }
         let query = match cstr_to_str(statement_text) {
             Ok(s) => s,
             Err(_) => return SQL_ERROR,
@@ -312,6 +330,9 @@ pub unsafe extern "C" fn SQLExecDirect(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn SQLFetch(statement_handle: *mut c_void) -> c_int {
+    if statement_handle.is_null() {
+        return SQL_ERROR;
+    }
     let id = statement_handle as usize;
     let mut v = STMT_STORE.lock().unwrap();
     match v.get_mut(id).and_then(|e| e.as_mut()) {
@@ -337,7 +358,7 @@ pub unsafe extern "C" fn SQLGetData(
     strlen_or_ind: *mut c_int,
 ) -> c_int {
     unsafe {
-        if target_value.is_null() || buffer_length <= 0 {
+        if statement_handle.is_null() || target_value.is_null() || buffer_length <= 0 {
             return SQL_ERROR;
         }
         let id = statement_handle as usize;
@@ -371,7 +392,7 @@ pub unsafe extern "C" fn SQLNumResultCols(
     column_count: *mut c_int,
 ) -> c_int {
     unsafe {
-        if column_count.is_null() {
+        if statement_handle.is_null() || column_count.is_null() {
             return SQL_ERROR;
         }
         let id = statement_handle as usize;
@@ -399,7 +420,7 @@ pub unsafe extern "C" fn SQLDescribeCol(
     _nullable: *mut c_int,
 ) -> c_int {
     unsafe {
-        if column_name.is_null() || buffer_length <= 0 {
+        if statement_handle.is_null() || column_name.is_null() || buffer_length <= 0 {
             return SQL_ERROR;
         }
         let id = statement_handle as usize;
@@ -430,7 +451,7 @@ pub unsafe extern "C" fn SQLRowCount(
     row_count: *mut c_int,
 ) -> c_int {
     unsafe {
-        if row_count.is_null() {
+        if statement_handle.is_null() || row_count.is_null() {
             return SQL_ERROR;
         }
         let id = statement_handle as usize;
@@ -456,6 +477,9 @@ pub unsafe extern "C" fn SQLColAttribute(
     numeric_attribute: *mut c_int,
 ) -> c_int {
     unsafe {
+        if statement_handle.is_null() {
+            return SQL_ERROR;
+        }
         let id = statement_handle as usize;
         let v = STMT_STORE.lock().unwrap();
         if v.get(id).and_then(|e| e.as_ref()).is_none() {

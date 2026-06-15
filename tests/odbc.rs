@@ -82,7 +82,7 @@ fn test_odbc_connect_and_query() {
 
         let mut col_count: c_int = 0;
         assert_eq!(SQLNumResultCols(stmt, &mut col_count), SQL_SUCCESS);
-        assert_eq!(col_count, 4, "Should have 4 columns");
+        assert_eq!(col_count, 3, "Should have 3 data columns (name, age, city)");
 
         let mut row_count: c_int = 0;
         assert_eq!(SQLRowCount(stmt, &mut row_count), SQL_SUCCESS);
@@ -254,7 +254,7 @@ fn test_odbc_get_data_values() {
         let dsn = cstr(path);
         SQLConnect(dbc, dsn.as_ptr(), -1, ptr::null(), -1, ptr::null(), -1);
 
-        let query = cstr("SELECT * FROM data WHERE id = 'user1'");
+        let query = cstr("SELECT * FROM data WHERE name = 'Alice'");
         SQLExecDirect(stmt, query.as_ptr(), -1);
 
         assert_eq!(SQLFetch(stmt), SQL_SUCCESS);
@@ -323,5 +323,6 @@ fn test_odbc_invalid_handle() {
 
         assert_eq!(SQLFetch(ptr::null_mut()), SQL_ERROR);
         assert_eq!(SQLDisconnect(ptr::null_mut()), SQL_ERROR);
+        assert_eq!(SQLFreeHandle(SQL_HANDLE_DBC, ptr::null_mut()), SQL_ERROR);
     }
 }

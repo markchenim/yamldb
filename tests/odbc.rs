@@ -25,32 +25,6 @@ fn setup_test_yaml(path: &str) {
 }
 
 #[test]
-fn test_odbc_alloc_and_free() {
-    unsafe {
-        let mut env: *mut c_void = ptr::null_mut();
-        let mut dbc: *mut c_void = ptr::null_mut();
-        let mut stmt: *mut c_void = ptr::null_mut();
-
-        assert_eq!(
-            SQLAllocHandle(SQL_HANDLE_ENV, ptr::null_mut(), &mut env),
-            SQL_SUCCESS
-        );
-        assert_eq!(
-            SQLAllocHandle(SQL_HANDLE_DBC, env, &mut dbc),
-            SQL_SUCCESS
-        );
-        assert_eq!(
-            SQLAllocHandle(SQL_HANDLE_STMT, dbc, &mut stmt),
-            SQL_SUCCESS
-        );
-
-        assert_eq!(SQLFreeHandle(SQL_HANDLE_STMT, stmt), SQL_SUCCESS);
-        assert_eq!(SQLFreeHandle(SQL_HANDLE_DBC, dbc), SQL_SUCCESS);
-        assert_eq!(SQLFreeHandle(SQL_HANDLE_ENV, env), SQL_SUCCESS);
-    }
-}
-
-#[test]
 fn test_odbc_connect_and_query() {
     let path = "test_odbc_connect.yaml";
     setup_test_yaml(path);
@@ -60,9 +34,21 @@ fn test_odbc_connect_and_query() {
         let mut dbc: *mut c_void = ptr::null_mut();
         let mut stmt: *mut c_void = ptr::null_mut();
 
-        SQLAllocHandle(SQL_HANDLE_ENV, ptr::null_mut(), &mut env);
-        SQLAllocHandle(SQL_HANDLE_DBC, env, &mut dbc);
-        SQLAllocHandle(SQL_HANDLE_STMT, dbc, &mut stmt);
+        assert_eq!(
+            SQLAllocHandle(SQL_HANDLE_ENV, ptr::null_mut(), &mut env),
+            SQL_SUCCESS,
+            "alloc env"
+        );
+        assert_eq!(
+            SQLAllocHandle(SQL_HANDLE_DBC, env, &mut dbc),
+            SQL_SUCCESS,
+            "alloc dbc"
+        );
+        assert_eq!(
+            SQLAllocHandle(SQL_HANDLE_STMT, dbc, &mut stmt),
+            SQL_SUCCESS,
+            "alloc stmt"
+        );
 
         let dsn = cstr(path);
         let ret = SQLConnect(

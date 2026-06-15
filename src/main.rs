@@ -135,16 +135,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Deleted record: {}", id);
         }
         Commands::Query { key, value } => {
-            let results = db.query(|r| {
+            let key_clone = key.clone();
+            let value_clone = value.clone();
+            let results = db.find_where(|r| {
                 r.data
-                    .get(&key)
+                    .get(&key_clone)
                     .and_then(|v| {
                         if let Some(s) = v.as_str() {
-                            Some(s == value)
+                            Some(s == value_clone)
                         } else if let Some(n) = v.as_i64() {
-                            Some(n.to_string() == value)
+                            Some(n.to_string() == value_clone)
                         } else {
-                            v.as_bool().map(|b| b.to_string() == value)
+                            v.as_bool().map(|b| b.to_string() == value_clone)
                         }
                     })
                     .unwrap_or(false)
@@ -152,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if results.is_empty() {
                 println!("No matching records");
             } else {
-                for record in results {
+                for record in results.to_vec() {
                     println!("{}: {}", record.id, serde_yaml::to_string(&record.data)?);
                 }
             }

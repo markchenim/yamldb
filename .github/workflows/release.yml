@@ -16,20 +16,25 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: yamldb-linux
+            ext: ''
           - os: windows-latest
             artifact: yamldb-windows.exe
+            ext: '.exe'
           - os: macos-latest
             artifact: yamldb-macos
+            ext: ''
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --verbose
       - run: cargo clippy -- -D warnings
       - run: cargo build --release
+      - name: Rename artifact
+        run: cp target/release/yamldb${{ matrix.ext }} ${{ matrix.artifact }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: target/release/yamldb${{ runner.os == 'Windows' && '.exe' || '' }}
+          path: ${{ matrix.artifact }}
 
   release:
     needs: build

@@ -17,25 +17,11 @@ pub const SQL_CHAR: c_int = 1;
 pub const SQL_INTEGER: c_int = 4;
 pub const SQL_VARCHAR: c_int = 12;
 
-const ENV_MAGIC: usize = 0xE001;
-const DBC_MAGIC: usize = 0xD001;
-const STMT_MAGIC: usize = 0xC001;
-
-struct HandleHeader {
-    magic: usize,
-}
-
-struct SqlEnvInner {
-    header: HandleHeader,
-}
-
-struct SqlDbcInner {
-    header: HandleHeader,
+struct SqlDbcEntry {
     db: Option<Mutex<YamlDb>>,
 }
 
-struct SqlStmtInner {
-    header: HandleHeader,
+struct SqlStmtEntry {
     dbc_id: usize,
     results: Vec<Record>,
     current_row: usize,
@@ -43,70 +29,20 @@ struct SqlStmtInner {
 }
 
 lazy_static::lazy_static! {
-    static ref CONNECTIONS: Mutex<Vec<Option<SqlDbcInner>>> = Mutex::new(Vec::new());
-    static ref STATEMENTS: Mutex<Vec<Option<SqlStmtInner>>> = Mutex::new(Vec::new());
+    static ref DBC_STORE: Mutex<Vec<Option<SqlDbcEntry>>> = Mutex::new(Vec::new());
+    static ref STMT_STORE: Mutex<Vec<Option<SqlStmtEntry>>> = Mutex::new(Vec::new());
 }
 
-fn alloc_dbc(dbc: SqlDbcInner) -> usize {
-    let mut conns = CONNECTIONS.lock().unwrap();
-    for (i, slot) in conns.iter_mut().enumerate() {
+fn slot_alloc<T>(store: &Mutex<Vec<Option<T>>>, item: T) -> usize {
+    let mut v = store.lock().unwrap();
+    for (i, slot) in v.iter_mut().enumerate() {
         if slot.is_none() {
-            *slot = Some(dbc);
+            *slot = Some(item);
             return i;
         }
     }
-    conns.push(Some(dbc));
-    conns.len() - 1
-}
-
-fn alloc_stmt(stmt: SqlStmtInner) -> usize {
-    let mut stmts = STATEMENTS.lock().unwrap();
-    for (i, slot) in stmts.iter_mut().enumerate() {
-        if slot.is_none() {
-            *slot = Some(stmt);
-            return i;
-        }
-    }
-    stmts.push(Some(stmt));
-    stmts.len() - 1
-}
-
-fn get_dbc(handle: *mut c_void) -> Option<&'static mut SqlDbcInner> {
-    if handle.is_null() {
-        return None;
-    }
-    let id = handle as usize;
-    let mut conns = CONNECTIONS.lock().unwrap();
-    if id >= conns.len() {
-        return None;
-    }
-    conns[id].as_mut().filter(|h| h.header.magic == DBC_MAGIC)
-}
-
-fn get_stmt(handle: *mut c_void) -> Option<&'static mut SqlStmtInner> {
-    if handle.is_null() {
-        return None;
-    }
-    let id = handle as usize;
-    let mut stmts = STATEMENTS.lock().unwrap();
-    if id >= stmts.len() {
-        return None;
-    }
-    stmts[id].as_mut().filter(|h| h.header.magic == STMT_MAGIC)
-}
-
-fn free_dbc(id: usize) {
-    let mut conns = CONNECTIONS.lock().unwrap();
-    if id < conns.len() {
-        conns[id] = None;
-    }
-}
-
-fn free_stmt(id: usize) {
-    let mut stmts = STATEMENTS.lock().unwrap();
-    if id < stmts.len() {
-        stmts[id] = None;
-    }
+    v.push(Some(item));
+    v.len() - 1
 }
 
 fn parse_dsn(dsn: &str) -> Option<String> {
@@ -122,80 +58,64 @@ fn parse_dsn(dsn: &str) -> Option<String> {
 }
 
 fn parse_query(query: &str) -> Option<QueryOp> {
-    let query = query.trim().to_lowercase();
-
-    if !query.starts_with("select") {
+    let q = query.trim().to_lowercase();
+    if !q.starts_with("select") {
         return None;
     }
-
-    if !query.contains("where") {
+    if !q.contains("where") {
         return Some(QueryOp::and(vec![]));
     }
-
-    let parts: Vec<&str> = query.splitn(2, "where").collect();
+    let parts: Vec<&str> = q.splitn(2, "where").collect();
     if parts.len() != 2 {
         return Some(QueryOp::and(vec![]));
     }
-
     parse_condition(parts[1].trim())
 }
 
-fn parse_condition(condition: &str) -> Option<QueryOp> {
-    let condition = condition.trim();
-
-    if condition.contains(" and ") {
-        let ops: Vec<QueryOp> = condition
-            .split(" and ")
-            .filter_map(|p| parse_single_condition(p.trim()))
-            .collect();
+fn parse_condition(cond: &str) -> Option<QueryOp> {
+    let cond = cond.trim();
+    if cond.contains(" and ") {
+        let ops: Vec<QueryOp> = cond.split(" and ").filter_map(|p| parse_cmp(p.trim())).collect();
         Some(QueryOp::and(ops))
-    } else if condition.contains(" or ") {
-        let ops: Vec<QueryOp> = condition
-            .split(" or ")
-            .filter_map(|p| parse_single_condition(p.trim()))
-            .collect();
+    } else if cond.contains(" or ") {
+        let ops: Vec<QueryOp> = cond.split(" or ").filter_map(|p| parse_cmp(p.trim())).collect();
         Some(QueryOp::or(ops))
     } else {
-        parse_single_condition(condition)
+        parse_cmp(cond)
     }
 }
 
-fn parse_single_condition(condition: &str) -> Option<QueryOp> {
-    let condition = condition.trim();
-
-    for op_sym in &[">=", "<=", "!=", "=", ">", "<"] {
-        if let Some(idx) = condition.find(*op_sym) {
-            let key = condition[..idx].trim().to_string();
-            let value_str = condition[idx + op_sym.len()..].trim();
-
-            let value = if value_str.starts_with('\'') && value_str.ends_with('\'') {
-                serde_yaml::Value::String(value_str[1..value_str.len() - 1].to_string())
-            } else if let Ok(n) = value_str.parse::<i64>() {
+fn parse_cmp(s: &str) -> Option<QueryOp> {
+    let s = s.trim();
+    for sym in &[">=", "<=", "!=", "=", ">", "<"] {
+        if let Some(idx) = s.find(*sym) {
+            let key = s[..idx].trim().to_string();
+            let val = s[idx + sym.len()..].trim();
+            let v = if val.starts_with('\'') && val.ends_with('\'') {
+                serde_yaml::Value::String(val[1..val.len() - 1].to_string())
+            } else if let Ok(n) = val.parse::<i64>() {
                 serde_yaml::Value::Number(n.into())
-            } else if let Ok(f) = value_str.parse::<f64>() {
+            } else if let Ok(f) = val.parse::<f64>() {
                 serde_yaml::Value::Number(serde_yaml::Number::from(f))
             } else {
-                serde_yaml::Value::String(value_str.to_string())
+                serde_yaml::Value::String(val.to_string())
             };
-
-            return match *op_sym {
-                "=" => Some(QueryOp::eq(key, value)),
-                "!=" => Some(QueryOp::ne(key, value)),
-                ">" => Some(QueryOp::gt(key, value)),
-                "<" => Some(QueryOp::lt(key, value)),
-                ">=" => Some(QueryOp::gte(key, value)),
-                "<=" => Some(QueryOp::lte(key, value)),
+            return match *sym {
+                "=" => Some(QueryOp::eq(key, v)),
+                "!=" => Some(QueryOp::ne(key, v)),
+                ">" => Some(QueryOp::gt(key, v)),
+                "<" => Some(QueryOp::lt(key, v)),
+                ">=" => Some(QueryOp::gte(key, v)),
+                "<=" => Some(QueryOp::lte(key, v)),
                 _ => None,
             };
         }
     }
-
     None
 }
 
-fn record_value_string(record: &Record, col: &str) -> String {
-    record
-        .data
+fn val_str(rec: &Record, col: &str) -> String {
+    rec.data
         .get(col)
         .map(|v| match v {
             serde_yaml::Value::String(s) => s.clone(),
@@ -207,10 +127,17 @@ fn record_value_string(record: &Record, col: &str) -> String {
         .unwrap_or_default()
 }
 
-fn write_cstr(dst: *mut c_char, buf_len: c_int, src: &[u8]) {
-    let max = (buf_len - 1) as usize;
-    let n = src.len().min(max);
+unsafe fn cstr_to_str<'a>(p: *const c_char) -> Result<&'a str, ()> {
+    if p.is_null() {
+        return Err(());
+    }
+    unsafe { CStr::from_ptr(p) }.to_str().map_err(|_| ())
+}
+
+unsafe fn write_bytes(dst: *mut c_char, buf_len: c_int, src: &[u8]) {
     unsafe {
+        let max = (buf_len - 1) as usize;
+        let n = src.len().min(max);
         ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, n);
         *dst.add(n) = 0;
     }
@@ -219,34 +146,29 @@ fn write_cstr(dst: *mut c_char, buf_len: c_int, src: &[u8]) {
 #[no_mangle]
 pub unsafe extern "C" fn SQLAllocHandle(
     handle_type: c_int,
-    _input_handle: *mut c_void,
+    input_handle: *mut c_void,
     output_handle: *mut *mut c_void,
 ) -> c_int {
     unsafe {
         match handle_type {
             SQL_HANDLE_ENV => {
-                *output_handle = (ENV_MAGIC as *mut c_void);
+                *output_handle = 1 as *mut c_void;
                 SQL_SUCCESS
             }
             SQL_HANDLE_DBC => {
-                let dbc = SqlDbcInner {
-                    header: HandleHeader { magic: DBC_MAGIC },
-                    db: None,
-                };
-                let id = alloc_dbc(dbc);
+                let id = slot_alloc(&DBC_STORE, SqlDbcEntry { db: None });
                 *output_handle = id as *mut c_void;
                 SQL_SUCCESS
             }
             SQL_HANDLE_STMT => {
-                let dbc_id = _input_handle as usize;
-                let stmt = SqlStmtInner {
-                    header: HandleHeader { magic: STMT_MAGIC },
+                let dbc_id = input_handle as usize;
+                let entry = SqlStmtEntry {
                     dbc_id,
                     results: Vec::new(),
                     current_row: 0,
                     columns: Vec::new(),
                 };
-                let id = alloc_stmt(stmt);
+                let id = slot_alloc(&STMT_STORE, entry);
                 *output_handle = id as *mut c_void;
                 SQL_SUCCESS
             }
@@ -257,14 +179,21 @@ pub unsafe extern "C" fn SQLAllocHandle(
 
 #[no_mangle]
 pub unsafe extern "C" fn SQLFreeHandle(handle_type: c_int, handle: *mut c_void) -> c_int {
+    let id = handle as usize;
     match handle_type {
         SQL_HANDLE_ENV => SQL_SUCCESS,
         SQL_HANDLE_DBC => {
-            free_dbc(handle as usize);
+            let mut v = DBC_STORE.lock().unwrap();
+            if id < v.len() {
+                v[id] = None;
+            }
             SQL_SUCCESS
         }
         SQL_HANDLE_STMT => {
-            free_stmt(handle as usize);
+            let mut v = STMT_STORE.lock().unwrap();
+            if id < v.len() {
+                v[id] = None;
+            }
             SQL_SUCCESS
         }
         _ => SQL_ERROR,
@@ -275,33 +204,28 @@ pub unsafe extern "C" fn SQLFreeHandle(handle_type: c_int, handle: *mut c_void) 
 pub unsafe extern "C" fn SQLConnect(
     connection_handle: *mut c_void,
     server_name: *const c_char,
-    _name_length1: c_int,
-    _user_name: *const c_char,
-    _name_length2: c_int,
-    _authentication: *const c_char,
-    _name_length3: c_int,
+    _nl1: c_int,
+    _user: *const c_char,
+    _nl2: c_int,
+    _auth: *const c_char,
+    _nl3: c_int,
 ) -> c_int {
     unsafe {
-        if server_name.is_null() {
-            return SQL_ERROR;
-        }
-
-        let dsn = match CStr::from_ptr(server_name).to_str() {
+        let dsn = match cstr_to_str(server_name) {
             Ok(s) => s,
             Err(_) => return SQL_ERROR,
         };
-
         let path = parse_dsn(dsn).unwrap_or_else(|| dsn.to_string());
-
-        let dbc = match get_dbc(connection_handle) {
-            Some(d) => d,
+        let id = connection_handle as usize;
+        let mut v = DBC_STORE.lock().unwrap();
+        let entry = match v.get_mut(id).and_then(|e| e.as_mut()) {
+            Some(e) => e,
             None => return SQL_ERROR,
         };
-
         let mut db = YamlDb::new(&path);
         match db.load() {
             Ok(_) => {
-                dbc.db = Some(Mutex::new(db));
+                entry.db = Some(Mutex::new(db));
                 SQL_SUCCESS
             }
             Err(_) => SQL_ERROR,
@@ -311,9 +235,11 @@ pub unsafe extern "C" fn SQLConnect(
 
 #[no_mangle]
 pub unsafe extern "C" fn SQLDisconnect(connection_handle: *mut c_void) -> c_int {
-    match get_dbc(connection_handle) {
-        Some(dbc) => {
-            dbc.db = None;
+    let id = connection_handle as usize;
+    let mut v = DBC_STORE.lock().unwrap();
+    match v.get_mut(id).and_then(|e| e.as_mut()) {
+        Some(entry) => {
+            entry.db = None;
             SQL_SUCCESS
         }
         None => SQL_ERROR,
@@ -327,40 +253,40 @@ pub unsafe extern "C" fn SQLExecDirect(
     _text_length: c_int,
 ) -> c_int {
     unsafe {
-        if statement_text.is_null() {
-            return SQL_ERROR;
-        }
-
-        let query = match CStr::from_ptr(statement_text).to_str() {
+        let query = match cstr_to_str(statement_text) {
             Ok(s) => s,
             Err(_) => return SQL_ERROR,
         };
 
-        let stmt = match get_stmt(statement_handle) {
-            Some(s) => s,
-            None => return SQL_ERROR,
-        };
+        let stmt_id = statement_handle as usize;
 
-        let dbc_id = stmt.dbc_id;
-        let conns = CONNECTIONS.lock().unwrap();
-        let dbc = match conns.get(dbc_id).and_then(|s| s.as_ref()) {
-            Some(d) => d,
-            None => return SQL_ERROR,
-        };
-
-        let db = match &dbc.db {
-            Some(db) => db,
-            None => return SQL_ERROR,
-        };
-
-        let db = db.lock().unwrap();
         let query_op = match parse_query(query) {
             Some(op) => op,
             None => return SQL_ERROR,
         };
 
-        let result = db.query(&query_op);
-        let records: Vec<Record> = result.to_vec().into_iter().cloned().collect();
+        let dbc_id = {
+            let sv = STMT_STORE.lock().unwrap();
+            match sv.get(stmt_id).and_then(|e| e.as_ref()) {
+                Some(s) => s.dbc_id,
+                None => return SQL_ERROR,
+            }
+        };
+
+        let records = {
+            let dv = DBC_STORE.lock().unwrap();
+            let entry = match dv.get(dbc_id).and_then(|e| e.as_ref()) {
+                Some(e) => e,
+                None => return SQL_ERROR,
+            };
+            let db = match &entry.db {
+                Some(db) => db,
+                None => return SQL_ERROR,
+            };
+            let db = db.lock().unwrap();
+            let result = db.query(&query_op);
+            result.to_vec().into_iter().cloned().collect::<Vec<Record>>()
+        };
 
         let columns = if let Some(first) = records.first() {
             let mut cols: Vec<String> = first.data.keys().cloned().collect();
@@ -370,23 +296,23 @@ pub unsafe extern "C" fn SQLExecDirect(
             Vec::new()
         };
 
-        drop(conns);
-
-        let stmt = match get_stmt(statement_handle) {
-            Some(s) => s,
-            None => return SQL_ERROR,
-        };
-        stmt.results = records;
-        stmt.current_row = 0;
-        stmt.columns = columns;
-
-        SQL_SUCCESS
+        let mut sv = STMT_STORE.lock().unwrap();
+        if let Some(stmt) = sv.get_mut(stmt_id).and_then(|e| e.as_mut()) {
+            stmt.results = records;
+            stmt.current_row = 0;
+            stmt.columns = columns;
+            SQL_SUCCESS
+        } else {
+            SQL_ERROR
+        }
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn SQLFetch(statement_handle: *mut c_void) -> c_int {
-    match get_stmt(statement_handle) {
+    let id = statement_handle as usize;
+    let mut v = STMT_STORE.lock().unwrap();
+    match v.get_mut(id).and_then(|e| e.as_mut()) {
         Some(stmt) => {
             if stmt.current_row < stmt.results.len() {
                 stmt.current_row += 1;
@@ -412,33 +338,27 @@ pub unsafe extern "C" fn SQLGetData(
         if target_value.is_null() || buffer_length <= 0 {
             return SQL_ERROR;
         }
-
-        let stmt = match get_stmt(statement_handle) {
+        let id = statement_handle as usize;
+        let v = STMT_STORE.lock().unwrap();
+        let stmt = match v.get(id).and_then(|e| e.as_ref()) {
             Some(s) => s,
             None => return SQL_ERROR,
         };
-
         if stmt.current_row == 0 || stmt.current_row > stmt.results.len() {
             return SQL_ERROR;
         }
-
         let row_idx = stmt.current_row - 1;
         let col_idx = (column_number - 1) as usize;
-
         if col_idx >= stmt.columns.len() {
             return SQL_ERROR;
         }
-
-        let col_name = stmt.columns[col_idx].clone();
-        let value = record_value_string(&stmt.results[row_idx], &col_name);
+        let col = stmt.columns[col_idx].clone();
+        let value = val_str(&stmt.results[row_idx], &col);
         let bytes = value.as_bytes();
-
-        write_cstr(target_value, buffer_length, bytes);
-
+        write_bytes(target_value, buffer_length, bytes);
         if !strlen_or_ind.is_null() {
             *strlen_or_ind = bytes.len() as c_int;
         }
-
         SQL_SUCCESS
     }
 }
@@ -452,8 +372,9 @@ pub unsafe extern "C" fn SQLNumResultCols(
         if column_count.is_null() {
             return SQL_ERROR;
         }
-
-        match get_stmt(statement_handle) {
+        let id = statement_handle as usize;
+        let v = STMT_STORE.lock().unwrap();
+        match v.get(id).and_then(|e| e.as_ref()) {
             Some(stmt) => {
                 *column_count = stmt.columns.len() as c_int;
                 SQL_SUCCESS
@@ -479,27 +400,24 @@ pub unsafe extern "C" fn SQLDescribeCol(
         if column_name.is_null() || buffer_length <= 0 {
             return SQL_ERROR;
         }
-
-        let stmt = match get_stmt(statement_handle) {
+        let id = statement_handle as usize;
+        let v = STMT_STORE.lock().unwrap();
+        let stmt = match v.get(id).and_then(|e| e.as_ref()) {
             Some(s) => s,
             None => return SQL_ERROR,
         };
-
         let col_idx = (column_number - 1) as usize;
         if col_idx >= stmt.columns.len() {
             return SQL_ERROR;
         }
-
         let name = stmt.columns[col_idx].as_bytes();
-        write_cstr(column_name, buffer_length, name);
-
+        write_bytes(column_name, buffer_length, name);
         if !name_length.is_null() {
             *name_length = name.len() as c_int;
         }
         if !data_type.is_null() {
             *data_type = SQL_VARCHAR;
         }
-
         SQL_SUCCESS
     }
 }
@@ -513,8 +431,9 @@ pub unsafe extern "C" fn SQLRowCount(
         if row_count.is_null() {
             return SQL_ERROR;
         }
-
-        match get_stmt(statement_handle) {
+        let id = statement_handle as usize;
+        let v = STMT_STORE.lock().unwrap();
+        match v.get(id).and_then(|e| e.as_ref()) {
             Some(stmt) => {
                 *row_count = stmt.results.len() as c_int;
                 SQL_SUCCESS
@@ -535,14 +454,14 @@ pub unsafe extern "C" fn SQLColAttribute(
     numeric_attribute: *mut c_int,
 ) -> c_int {
     unsafe {
-        if get_stmt(statement_handle).is_none() {
+        let id = statement_handle as usize;
+        let v = STMT_STORE.lock().unwrap();
+        if v.get(id).and_then(|e| e.as_ref()).is_none() {
             return SQL_ERROR;
         }
-
         if !numeric_attribute.is_null() {
             *numeric_attribute = 256;
         }
-
         SQL_SUCCESS
     }
 }

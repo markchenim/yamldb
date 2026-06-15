@@ -143,10 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Some(s == value)
                         } else if let Some(n) = v.as_i64() {
                             Some(n.to_string() == value)
-                        } else if let Some(b) = v.as_bool() {
-                            Some(b.to_string() == value)
                         } else {
-                            None
+                            v.as_bool().map(|b| b.to_string() == value)
                         }
                     })
                     .unwrap_or(false)

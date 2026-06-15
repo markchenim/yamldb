@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+pub mod odbc;
+
 #[derive(Error, Debug)]
 pub enum YamlDbError {
     #[error("IO error: {0}")]

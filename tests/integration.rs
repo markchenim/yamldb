@@ -167,7 +167,7 @@ mod tests {
         r2.set("city", "Shanghai");
         db.create(r2).unwrap();
 
-        let result = db.query(&QueryOp::not(QueryOp::eq("city", "Beijing")));
+        let result = db.query(&QueryOp::negate(QueryOp::eq("city", "Beijing")));
         assert_eq!(result.count(), 1);
     }
 

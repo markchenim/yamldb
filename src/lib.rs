@@ -144,7 +144,7 @@ impl QueryOp {
         Self::Or(ops)
     }
 
-    pub fn not(op: QueryOp) -> Self {
+    pub fn negate(op: QueryOp) -> Self {
         Self::Not(Box::new(op))
     }
 

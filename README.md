@@ -1,15 +1,17 @@
 # YamlDB
 
-A lightweight YAML file-based database with CLI and ODBC driver support.
+A lightweight YAML file-based database with CLI support.
 
 ## Features
 
 - YAML file as data storage
 - CRUD operations
 - Query builder with conditions
+- Fuzzy search
 - Import/Export (JSON, YAML)
+- Backup/Restore
+- Database statistics
 - CLI tool
-- ODBC driver interface
 
 ## Installation
 
@@ -29,48 +31,68 @@ yamldb create user1 --fields name=Alice,age=30,city=Beijing
 
 # Get record
 yamldb get user1
+yamldb get user1 --format json
 
 # List all records
 yamldb list
+yamldb list --limit 10
+yamldb list --format json
 
 # Update record
 yamldb update user1 --fields age=31,city=Guangzhou
 
 # Delete record
 yamldb delete user1
+```
 
-# Query records
+### Query Commands
+
+```bash
+# Query with conditions
 yamldb query --key city --value Beijing
+yamldb query --key age --value 25 --op gt
+yamldb query --key name --value Ali --op contains
 
+# Fuzzy search
+yamldb search --keyword alice
+yamldb search --keyword alice --key name
+```
+
+### Import/Export
+
+```bash
 # Import from file
 yamldb import -i users.json
 yamldb import -i users.yaml
+
+# Export to file
+yamldb export -o backup.json
+yamldb export -o backup.yaml --format yaml
+
+# Backup database
+yamldb backup -o backup.yaml
 ```
 
-### Options
+### Utility Commands
+
+```bash
+# Show statistics
+yamldb stats
+
+# Count records
+yamldb count
+
+# Check if record exists
+yamldb exists user1
+
+# Clear database (requires --force)
+yamldb clear --force
+```
+
+### Global Options
 
 ```
 -f, --file <FILE>  Specify YAML file path [default: data.yaml]
-```
-
-### Import Format
-
-**JSON:**
-```json
-[
-  {"id": "user1", "name": "Alice", "age": 30},
-  {"id": "user2", "name": "Bob", "age": 25}
-]
-```
-
-**YAML:**
-```yaml
-- id: user1
-  name: Alice
-  age: 30
-- id: user2
-  name: Bob
-  age: 25
 ```
 
 ## Rust API
@@ -117,6 +139,11 @@ let result = db.query(&QueryOp::eq("city", "Beijing"));
 // Comparison
 let result = db.query(&QueryOp::gt("age", serde_yaml::Value::Number(25.into())));
 
+// String operations
+let result = db.query(&QueryOp::contains("name", "Ali"));
+let result = db.query(&QueryOp::starts_with("name", "Ali"));
+let result = db.query(&QueryOp::ends_with("name", "Smith"));
+
 // AND condition
 let result = db.query(&QueryOp::and(vec![
     QueryOp::eq("city", "Beijing"),
@@ -128,6 +155,19 @@ let result = db.query(&QueryOp::or(vec![
     QueryOp::eq("city", "Beijing"),
     QueryOp::eq("city", "Shanghai"),
 ]));
+
+// NOT condition
+let result = db.query(&QueryOp::not(QueryOp::eq("city", "Beijing")));
+```
+
+### Search
+
+```rust
+// Search in specific field
+let result = db.search("name", "alice");
+
+// Search in all fields
+let result = db.search_all("alice");
 ```
 
 ### QueryResult
@@ -138,10 +178,13 @@ let result = db.query(&QueryOp::eq("city", "Beijing"));
 // Get count
 println!("Count: {}", result.count());
 
-// Get first record
+// Get first/last record
 if let Some(record) = result.first() {
     println!("First: {}", record.id);
 }
+
+// Pagination
+let page = result.page(1, 10); // page 1, 10 items per page
 
 // Iterate
 for record in result.iter() {
@@ -149,111 +192,38 @@ for record in result.iter() {
 }
 ```
 
-### Import/Export
+### Statistics
 
 ```rust
-use std::path::Path;
-
-// Import from JSON
-let count = db.import_json(Path::new("users.json"))?;
-println!("Imported {} records", count);
-
-// Import from YAML
-let count = db.import_yaml(Path::new("users.yaml"))?;
-
-// Export to JSON
-db.export_json(Path::new("backup.json"))?;
+let stats = db.stats();
+println!("Total records: {}", stats.total_records);
+println!("Unique keys: {:?}", stats.unique_keys);
 ```
 
-## ODBC Driver
+### Backup
 
-### Connection String
-
-```
-DRIVER={YamlDB};DBQ=data.yaml;
-DRIVER={YamlDB};FILE=data.yaml;
+```rust
+db.backup(Path::new("backup.yaml"))?;
 ```
 
-### Supported SQL
+## Import Format
 
-```sql
--- Select all
-SELECT * FROM data
-
--- Where clause
-SELECT * FROM data WHERE city = 'Beijing'
-
--- Comparison operators
-SELECT * FROM data WHERE age > 25
-SELECT * FROM data WHERE age >= 28
-SELECT * FROM data WHERE age < 30
-SELECT * FROM data WHERE age <= 25
-SELECT * FROM data WHERE city != 'Shanghai'
-
--- AND/OR conditions
-SELECT * FROM data WHERE city = 'Beijing' AND age >= 28
-SELECT * FROM data WHERE city = 'Beijing' OR city = 'Shanghai'
+**JSON:**
+```json
+[
+  {"id": "user1", "name": "Alice", "age": 30},
+  {"id": "user2", "name": "Bob", "age": 25}
+]
 ```
 
-### Build Shared Library
-
-```bash
-cargo build --release
-```
-
-Output:
-- Windows: `target/release/yamldb.dll`
-- Linux: `target/release/libyamldb.so`
-- macOS: `target/release/libyamldb.dylib`
-
-### Register Driver
-
-**Windows:**
-1. Open ODBC Data Source Administrator
-2. Go to "Drivers" tab
-3. Click "Add"
-4. Browse to `yamldb.dll`
-
-**Linux:**
-Add to `/etc/odbcinst.ini`:
-```ini
-[YamlDB]
-Description=YamlDB ODBC Driver
-Driver=/path/to/libyamldb.so
-```
-
-### Usage Example (Python)
-
-```python
-import pyodbc
-
-conn = pyodbc.connect('DRIVER={YamlDB};DBQ=data.yaml;')
-cursor = conn.cursor()
-
-cursor.execute("SELECT * FROM data WHERE city = 'Beijing'")
-for row in cursor:
-    print(row)
-
-conn.close()
-```
-
-### Usage Example (C#)
-
-```csharp
-using System.Data.Odbc;
-
-var conn = new OdbcConnection("DRIVER={YamlDB};DBQ=data.yaml;");
-conn.Open();
-
-var cmd = new OdbcCommand("SELECT * FROM data WHERE age > 25", conn);
-var reader = cmd.ExecuteReader();
-
-while (reader.Read())
-{
-    Console.WriteLine($"{reader["id"]}: {reader["name"]}");
-}
-
-conn.Close();
+**YAML:**
+```yaml
+- id: user1
+  name: Alice
+  age: 30
+- id: user2
+  name: Bob
+  age: 25
 ```
 
 ## Error Handling

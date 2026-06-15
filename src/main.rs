@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use yamldb::{Record, YamlDb};
+use yamldb::{QueryOp, Record, YamlDb};
 
 #[derive(Parser)]
 #[command(name = "yamldb", about = "YAML file based database CLI")]
@@ -22,8 +22,15 @@ enum Commands {
     },
     Get {
         id: String,
+        #[arg(long)]
+        format: Option<String>,
     },
-    List,
+    List {
+        #[arg(long)]
+        format: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     Update {
         id: String,
         #[arg(short, long, value_delimiter = ',')]
@@ -37,10 +44,37 @@ enum Commands {
         key: String,
         #[arg(short, long)]
         value: String,
+        #[arg(long)]
+        op: Option<String>,
+    },
+    Search {
+        #[arg(short, long)]
+        keyword: String,
+        #[arg(short, long)]
+        key: Option<String>,
     },
     Import {
         #[arg(short, long)]
         input: PathBuf,
+    },
+    Export {
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value = "json")]
+        format: String,
+    },
+    Backup {
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    Stats,
+    Count,
+    Exists {
+        id: String,
+    },
+    Clear {
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -59,6 +93,13 @@ fn parse_fields(fields: &[String]) -> HashMap<String, serde_yaml::Value> {
         }
     }
     map
+}
+
+fn format_record(record: &Record, format: Option<&str>) -> String {
+    match format {
+        Some("json") => record.to_json().unwrap_or_default(),
+        _ => format!("{}: {}", record.id, serde_yaml::to_string(&record.data).unwrap_or_default()),
+    }
 }
 
 fn import_records(db: &mut YamlDb, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -111,17 +152,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             db.create(Record { id: id.clone(), data })?;
             println!("Created record: {}", id);
         }
-        Commands::Get { id } => {
+        Commands::Get { id, format } => {
             let record = db.read(&id)?;
-            println!("{}: {}", record.id, serde_yaml::to_string(&record.data)?);
+            println!("{}", format_record(record, format.as_deref()));
         }
-        Commands::List => {
+        Commands::List { format, limit } => {
             let records = db.read_all();
             if records.is_empty() {
                 println!("No records found");
             } else {
-                for record in records {
-                    println!("{}: {}", record.id, serde_yaml::to_string(&record.data)?);
+                let iter: Vec<_> = if let Some(n) = limit {
+                    records.into_iter().take(n).collect()
+                } else {
+                    records
+                };
+                for record in iter {
+                    println!("{}", format_record(record, format.as_deref()));
                 }
             }
         }
@@ -134,34 +180,81 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             db.delete(&id)?;
             println!("Deleted record: {}", id);
         }
-        Commands::Query { key, value } => {
-            let key_clone = key.clone();
-            let value_clone = value.clone();
-            let results = db.find_where(|r| {
-                r.data
-                    .get(&key_clone)
-                    .and_then(|v| {
-                        if let Some(s) = v.as_str() {
-                            Some(s == value_clone)
-                        } else if let Some(n) = v.as_i64() {
-                            Some(n.to_string() == value_clone)
-                        } else {
-                            v.as_bool().map(|b| b.to_string() == value_clone)
-                        }
-                    })
-                    .unwrap_or(false)
-            });
+        Commands::Query { key, value, op } => {
+            let query_op = match op.as_deref() {
+                Some("ne") => QueryOp::ne(key, value),
+                Some("gt") => QueryOp::gt(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
+                Some("lt") => QueryOp::lt(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
+                Some("gte") => QueryOp::gte(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
+                Some("lte") => QueryOp::lte(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
+                Some("contains") => QueryOp::contains(key, value),
+                _ => QueryOp::eq(key, value),
+            };
+            let results = db.query(&query_op);
             if results.is_empty() {
                 println!("No matching records");
             } else {
                 for record in results.to_vec() {
-                    println!("{}: {}", record.id, serde_yaml::to_string(&record.data)?);
+                    println!("{}", format_record(record, None));
+                }
+            }
+        }
+        Commands::Search { keyword, key } => {
+            let results = if let Some(k) = key {
+                db.search(&k, &keyword)
+            } else {
+                db.search_all(&keyword)
+            };
+            if results.is_empty() {
+                println!("No matching records");
+            } else {
+                for record in results.to_vec() {
+                    println!("{}", format_record(record, None));
                 }
             }
         }
         Commands::Import { input } => {
             import_records(&mut db, &input)?;
             println!("Imported records from: {}", input.display());
+        }
+        Commands::Export { output, format } => {
+            match format.as_str() {
+                "json" => db.export_json(&output)?,
+                "yaml" | "yml" => db.export_yaml(&output)?,
+                _ => return Err(format!("Unsupported format: {}", format).into()),
+            }
+            println!("Exported to: {}", output.display());
+        }
+        Commands::Backup { output } => {
+            db.backup(&output)?;
+            println!("Backup created: {}", output.display());
+        }
+        Commands::Stats => {
+            let stats = db.stats();
+            println!("Total records: {}", stats.total_records);
+            println!("Total unique keys: {}", stats.total_keys);
+            println!("Keys: {:?}", stats.unique_keys);
+            if let Some(size) = stats.file_size {
+                println!("File size: {} bytes", size);
+            }
+        }
+        Commands::Count => {
+            println!("{}", db.count());
+        }
+        Commands::Exists { id } => {
+            if db.exists(&id) {
+                println!("true");
+            } else {
+                println!("false");
+            }
+        }
+        Commands::Clear { force } => {
+            if force {
+                db.clear()?;
+                println!("Database cleared");
+            } else {
+                println!("Use --force to confirm clearing the database");
+            }
         }
     }
 

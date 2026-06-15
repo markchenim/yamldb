@@ -18,6 +18,8 @@ pub enum YamlDbError {
     DuplicateKey(String),
     #[error("Invalid query: {0}")]
     InvalidQuery(String),
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +61,26 @@ impl Record {
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.data.get(key).and_then(|v| v.as_bool())
     }
+
+    pub fn has_key(&self, key: &str) -> bool {
+        self.data.contains_key(key)
+    }
+
+    pub fn keys(&self) -> Vec<&String> {
+        self.data.keys().collect()
+    }
+
+    pub fn merge(&mut self, other: &Record) {
+        for (key, value) in &other.data {
+            self.data.insert(key.clone(), value.clone());
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        let mut map = self.data.clone();
+        map.insert("id".to_string(), serde_yaml::Value::String(self.id.clone()));
+        serde_json::to_string_pretty(&map)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -70,8 +92,11 @@ pub enum QueryOp {
     Gte(String, serde_yaml::Value),
     Lte(String, serde_yaml::Value),
     Contains(String, String),
+    StartsWith(String, String),
+    EndsWith(String, String),
     And(Vec<QueryOp>),
     Or(Vec<QueryOp>),
+    Not(Box<QueryOp>),
 }
 
 impl QueryOp {
@@ -103,6 +128,14 @@ impl QueryOp {
         Self::Contains(key.into(), value.into())
     }
 
+    pub fn starts_with(key: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::StartsWith(key.into(), value.into())
+    }
+
+    pub fn ends_with(key: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::EndsWith(key.into(), value.into())
+    }
+
     pub fn and(ops: Vec<QueryOp>) -> Self {
         Self::And(ops)
     }
@@ -111,7 +144,11 @@ impl QueryOp {
         Self::Or(ops)
     }
 
-    fn matches(&self, record: &Record) -> bool {
+    pub fn not(op: QueryOp) -> Self {
+        Self::Not(Box::new(op))
+    }
+
+    pub fn matches(&self, record: &Record) -> bool {
         match self {
             QueryOp::Eq(key, value) => record.data.get(key).map(|v| v == value).unwrap_or(false),
             QueryOp::Ne(key, value) => record.data.get(key).map(|v| v != value).unwrap_or(true),
@@ -131,8 +168,21 @@ impl QueryOp {
                 .and_then(|v| v.as_str())
                 .map(|s| s.contains(substr.as_str()))
                 .unwrap_or(false),
+            QueryOp::StartsWith(key, prefix) => record
+                .data
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.starts_with(prefix.as_str()))
+                .unwrap_or(false),
+            QueryOp::EndsWith(key, suffix) => record
+                .data
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.ends_with(suffix.as_str()))
+                .unwrap_or(false),
             QueryOp::And(ops) => ops.iter().all(|op| op.matches(record)),
             QueryOp::Or(ops) => ops.iter().any(|op| op.matches(record)),
+            QueryOp::Not(op) => !op.matches(record),
         }
     }
 }
@@ -169,6 +219,10 @@ impl<'a> QueryResult<'a> {
         self.records.first().copied()
     }
 
+    pub fn last(&self) -> Option<&'a Record> {
+        self.records.last().copied()
+    }
+
     pub fn count(&self) -> usize {
         self.records.len()
     }
@@ -192,6 +246,15 @@ impl<'a> QueryResult<'a> {
         self.records.iter().take(n).copied().collect()
     }
 
+    pub fn skip(&self, n: usize) -> Vec<&'a Record> {
+        self.records.iter().skip(n).copied().collect()
+    }
+
+    pub fn page(&self, page: usize, page_size: usize) -> Vec<&'a Record> {
+        let start = (page - 1) * page_size;
+        self.records.iter().skip(start).take(page_size).copied().collect()
+    }
+
     pub fn to_vec(&self) -> Vec<&'a Record> {
         self.records.clone()
     }
@@ -199,6 +262,18 @@ impl<'a> QueryResult<'a> {
     pub fn iter(&self) -> impl Iterator<Item = &&'a Record> {
         self.records.iter()
     }
+
+    pub fn ids(&self) -> Vec<&str> {
+        self.records.iter().map(|r| r.id.as_str()).collect()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DbStats {
+    pub total_records: usize,
+    pub total_keys: usize,
+    pub unique_keys: Vec<String>,
+    pub file_size: Option<u64>,
 }
 
 pub struct YamlDb {
@@ -274,6 +349,12 @@ impl YamlDb {
         self.records.values().collect()
     }
 
+    pub fn read_many(&self, ids: &[&str]) -> Vec<&Record> {
+        ids.iter()
+            .filter_map(|id| self.records.get(*id))
+            .collect()
+    }
+
     pub fn update(&mut self, id: &str, data: HashMap<String, serde_yaml::Value>) -> Result<(), YamlDbError> {
         let record = self
             .records
@@ -290,6 +371,20 @@ impl YamlDb {
             .ok_or_else(|| YamlDbError::NotFound(id.to_string()))?;
         record.data.insert(key.to_string(), value);
         self.save()
+    }
+
+    pub fn update_many(&mut self, updates: Vec<(String, HashMap<String, serde_yaml::Value>)>) -> Result<usize, YamlDbError> {
+        let mut count = 0;
+        for (id, data) in updates {
+            if let Some(record) = self.records.get_mut(&id) {
+                record.data = data;
+                count += 1;
+            }
+        }
+        if count > 0 {
+            self.save()?;
+        }
+        Ok(count)
     }
 
     pub fn delete(&mut self, id: &str) -> Result<(), YamlDbError> {
@@ -325,6 +420,37 @@ impl YamlDb {
         QueryResult { records }
     }
 
+    pub fn search(&self, key: &str, keyword: &str) -> QueryResult<'_> {
+        let keyword_lower = keyword.to_lowercase();
+        let records: Vec<&Record> = self.records
+            .values()
+            .filter(|r| {
+                r.data
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_lowercase().contains(&keyword_lower))
+                    .unwrap_or(false)
+            })
+            .collect();
+        QueryResult { records }
+    }
+
+    pub fn search_all(&self, keyword: &str) -> QueryResult<'_> {
+        let keyword_lower = keyword.to_lowercase();
+        let records: Vec<&Record> = self.records
+            .values()
+            .filter(|r| {
+                r.id.to_lowercase().contains(&keyword_lower)
+                    || r.data.values().any(|v| {
+                        v.as_str()
+                            .map(|s| s.to_lowercase().contains(&keyword_lower))
+                            .unwrap_or(false)
+                    })
+            })
+            .collect();
+        QueryResult { records }
+    }
+
     pub fn count(&self) -> usize {
         self.records.len()
     }
@@ -341,6 +467,35 @@ impl YamlDb {
     pub fn upsert(&mut self, record: Record) -> Result<(), YamlDbError> {
         self.records.insert(record.id.clone(), record);
         self.save()
+    }
+
+    pub fn stats(&self) -> DbStats {
+        let mut all_keys = std::collections::HashSet::new();
+        for record in self.records.values() {
+            for key in record.data.keys() {
+                all_keys.insert(key.clone());
+            }
+        }
+        let mut unique_keys: Vec<String> = all_keys.into_iter().collect();
+        unique_keys.sort();
+
+        let file_size = self.path.as_ref()
+            .and_then(|p| fs::metadata(p).ok())
+            .map(|m| m.len());
+
+        DbStats {
+            total_records: self.records.len(),
+            total_keys: unique_keys.len(),
+            unique_keys,
+            file_size,
+        }
+    }
+
+    pub fn backup(&self, backup_path: &Path) -> Result<(), YamlDbError> {
+        let records: Vec<&Record> = self.records.values().collect();
+        let content = serde_yaml::to_string(&records)?;
+        fs::write(backup_path, content)?;
+        Ok(())
     }
 
     pub fn import_json(&mut self, path: &Path) -> Result<usize, YamlDbError> {
@@ -386,6 +541,14 @@ impl YamlDb {
         let records: Vec<&Record> = self.records.values().collect();
         let content = serde_json::to_string_pretty(&records)?;
         fs::write(path, content)?;
+        Ok(())
+    }
+
+    pub fn export_yaml(&self, path: &Path) -> Result<(), YamlDbError> {
+        self.save()?;
+        if let Some(src) = &self.path {
+            fs::copy(src, path)?;
+        }
         Ok(())
     }
 }

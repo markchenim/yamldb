@@ -1,163 +1,157 @@
-# YamlDB
+# YamlDB 中文文档
 
-[中文文档](README.zh-CN.md)
+[English](README.md)
 
 [![CI](https://github.com/markchenim/yamldb/actions/workflows/ci.yml/badge.svg)](https://github.com/markchenim/yamldb/actions/workflows/ci.yml)
 [![Release](https://github.com/markchenim/yamldb/actions/workflows/release.yml/badge.svg)](https://github.com/markchenim/yamldb/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A lightweight YAML file-based database with CLI tool, Rust API, ODBC driver, and JDBC driver support.
+YamlDB 是一个轻量级 YAML 文件数据库，提供命令行工具、Rust API、实验性的 ODBC 驱动和 JDBC 驱动支持。它适合保存少量结构化数据、测试数据、配置型数据和需要人工可读/可编辑的数据文件。
 
-## Features
+## 功能特性
 
-- **YAML Storage** - Human-readable data format
-- **CRUD Operations** - Create, Read, Update, Delete
-- **Query Builder** - Flexible conditions with AND/OR/NOT
-- **Fuzzy Search** - Case-insensitive keyword search
-- **Import/Export** - JSON and YAML formats
-- **Backup/Restore** - Database snapshots
-- **CLI Tool** - Command-line interface
-- **ODBC Driver** - SQL query support
-- **JDBC Driver** - Java SQL access support
+- **YAML 存储**：数据文件可读、可编辑，适合版本管理。
+- **CRUD 操作**：支持创建、读取、更新、删除记录。
+- **查询构造器**：支持等于、不等于、大小比较、字符串匹配、AND/OR/NOT。
+- **模糊搜索**：支持大小写不敏感的关键字搜索。
+- **导入导出**：支持 JSON 和 YAML。
+- **备份**：可生成数据库快照。
+- **CLI 工具**：可直接在命令行管理 YAML 数据。
+- **ODBC 驱动**：支持通过简单 SQL 查询 YAML 数据。
+- **JDBC 驱动**：支持 Java 通过 JDBC 读取 YAML 数据。
 
-## Installation
+## 安装
 
-### From Cargo
+### 通过 Cargo 安装
 
 ```bash
 cargo install yamldb
 ```
 
-### From Releases
+### 从 GitHub Releases 下载
 
-Download pre-built binaries from [GitHub Releases](https://github.com/markchenim/yamldb/releases):
+可以从 [GitHub Releases](https://github.com/markchenim/yamldb/releases) 下载预构建文件：
 
-| Platform | CLI | ODBC Driver | JDBC Driver |
-|----------|-----|-------------|-------------|
+| 平台 | CLI | ODBC 驱动 | JDBC 驱动 |
+| ---- | --- | --------- | --------- |
 | Linux | `yamldb-linux` | `libyamldb-linux-odbc.so` | `yamldb-jdbc.jar` |
 | Windows | `yamldb-windows.exe` | `yamldb-windows-odbc.dll` | `yamldb-jdbc.jar` |
 | macOS | `yamldb-macos` | `libyamldb-macos-odbc.dylib` | `yamldb-jdbc.jar` |
 
-## CLI Usage
+## CLI 用法
 
-### Global Options
+### 全局参数
 
+```text
+-f, --file <FILE>  指定 YAML 数据文件路径，默认 data.yaml
 ```
--f, --file <FILE>  Specify YAML file path [default: data.yaml]
-```
 
-### Record Operations
+### 记录操作
 
 ```bash
-# Create
+# 创建记录
 yamldb create user1 --fields name=Alice,age=30,city=Beijing
 
-# Read
+# 读取记录
 yamldb get user1
 yamldb get user1 --format json
 
-# List
+# 列出记录
 yamldb list
 yamldb list --limit 10
 yamldb list --format json
 
-# Update
+# 更新记录
 yamldb update user1 --fields age=31,city=Guangzhou
 
-# Delete
+# 删除记录
 yamldb delete user1
 ```
 
-### Query & Search
+### 查询与搜索
 
 ```bash
-# Equality
+# 等值查询
 yamldb query --key city --value Beijing
 
-# Comparison operators
-yamldb query --key age --value 25 --op gt      # > 25
-yamldb query --key age --value 30 --op gte     # >= 30
-yamldb query --key age --value 50 --op lt      # < 50
-yamldb query --key age --value 25 --op lte     # <= 25
-yamldb query --key city --value Beijing --op ne  # != Beijing
+# 比较操作
+yamldb query --key age --value 25 --op gt
+yamldb query --key age --value 30 --op gte
+yamldb query --key age --value 50 --op lt
+yamldb query --key age --value 25 --op lte
+yamldb query --key city --value Beijing --op ne
 
-# String operations
+# 字符串包含
 yamldb query --key name --value Ali --op contains
 
-# Fuzzy search
+# 模糊搜索
 yamldb search --keyword alice
 yamldb search --keyword alice --key name
 ```
 
-### Import & Export
+### 导入、导出与备份
 
 ```bash
-# Import
+# 导入
 yamldb import -i users.json
 yamldb import -i users.yaml
 
-# Export
+# 导出
 yamldb export -o backup.json
 yamldb export -o backup.yaml --format yaml
 
-# Backup
+# 备份
 yamldb backup -o backup.yaml
 ```
 
-### Utility Commands
+### 工具命令
 
 ```bash
-# Statistics
+# 统计信息
 yamldb stats
 
-# Count records
+# 记录数量
 yamldb count
 
-# Check existence
+# 检查记录是否存在
 yamldb exists user1
 
-# Clear database
+# 清空数据库
 yamldb clear --force
 ```
 
 ## Rust API
 
-### Basic Usage
+### 基本用法
 
 ```rust
 use yamldb::{Record, YamlDb};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Open database
     let mut db = YamlDb::new("data.yaml");
     db.load()?;
 
-    // Create record
     let mut record = Record::new("user1");
-    record.set("name", "Alice")
-          .set("age", 30)
-          .set("city", "Beijing");
+    record
+        .set("name", "Alice")
+        .set("age", 30)
+        .set("city", "Beijing");
     db.create(record)?;
 
-    // Read record
     let record = db.read("user1")?;
     println!("Name: {:?}", record.get_str("name"));
     println!("Age: {:?}", record.get_i64("age"));
 
-    // Update single field
     db.update_field("user1", "age", serde_yaml::Value::Number(31.into()))?;
-
-    // Delete record
     db.delete("user1")?;
 
     Ok(())
 }
 ```
 
-### Memory Database
+### 内存数据库
 
 ```rust
-// In-memory database (no file I/O)
 let mut db = YamlDb::memory();
 let mut record = Record::new("test");
 record.set("key", "value");
@@ -169,39 +163,34 @@ db.create(record)?;
 ```rust
 let mut record = Record::new("user1");
 
-// Set values (chainable)
-record.set("name", "Alice")
-      .set("age", 30)
-      .set("active", true);
+record
+    .set("name", "Alice")
+    .set("age", 30)
+    .set("active", true);
 
-// Get typed values
-record.get_str("name");    // Some("Alice")
-record.get_i64("age");     // Some(30)
-record.get_f64("score");   // None
-record.get_bool("active"); // Some(true)
+record.get_str("name");
+record.get_i64("age");
+record.get_f64("score");
+record.get_bool("active");
 
-// Check keys
-record.has_key("name");  // true
-record.keys();           // ["name", "age", "active"]
+record.has_key("name");
+record.keys();
 
-// Merge records
 let mut other = Record::new("user1");
 other.set("email", "alice@example.com");
 record.merge(&other);
 
-// Convert to JSON
 let json = record.to_json()?;
 ```
 
-### Query Builder
+### 查询构造器
 
 ```rust
 use yamldb::{QueryOp, YamlDb};
 
-let db = YamlDb::new("data.yaml");
+let mut db = YamlDb::new("data.yaml");
 db.load()?;
 
-// Comparison operators
 let result = db.query(&QueryOp::eq("city", "Beijing"));
 let result = db.query(&QueryOp::ne("city", "Shanghai"));
 let result = db.query(&QueryOp::gt("age", serde_yaml::Value::Number(25.into())));
@@ -209,12 +198,10 @@ let result = db.query(&QueryOp::gte("age", serde_yaml::Value::Number(30.into()))
 let result = db.query(&QueryOp::lt("age", serde_yaml::Value::Number(50.into())));
 let result = db.query(&QueryOp::lte("age", serde_yaml::Value::Number(25.into())));
 
-// String operations
 let result = db.query(&QueryOp::contains("name", "Ali"));
 let result = db.query(&QueryOp::starts_with("name", "Ali"));
 let result = db.query(&QueryOp::ends_with("name", "Smith"));
 
-// Logical operators
 let result = db.query(&QueryOp::and(vec![
     QueryOp::eq("city", "Beijing"),
     QueryOp::gte("age", serde_yaml::Value::Number(28.into())),
@@ -228,13 +215,10 @@ let result = db.query(&QueryOp::or(vec![
 let result = db.query(&QueryOp::negate(QueryOp::eq("city", "Beijing")));
 ```
 
-### Search
+### 搜索
 
 ```rust
-// Search in specific field (case-insensitive)
 let result = db.search("name", "alice");
-
-// Search in all fields
 let result = db.search_all("alice");
 ```
 
@@ -243,157 +227,136 @@ let result = db.search_all("alice");
 ```rust
 let result = db.query(&QueryOp::eq("city", "Beijing"));
 
-// Count
 println!("Found: {}", result.count());
 println!("Is empty: {}", result.is_empty());
 
-// Access records
 if let Some(first) = result.first() {
     println!("First: {}", first.id);
 }
-if let Some(last) = result.last() {
-    println!("Last: {}", last.id);
-}
 
-// Pagination
-let page1 = result.page(1, 10);  // Page 1, 10 items per page
-let page2 = result.page(2, 10);  // Page 2
+let page1 = result.page(1, 10);
+let page2 = result.page(2, 10);
 
-// Skip and limit
 let skipped = result.skip(5);
 let limited = result.limit(10);
-
-// Get all IDs
 let ids = result.ids();
 
-// Iterate
 for record in result.iter() {
     println!("{}: {:?}", record.id, record.data);
 }
 
-// Convert to Vec
 let all = result.to_vec();
 ```
 
-### Batch Operations
+### 批量操作
 
 ```rust
-// Read multiple records
+use std::collections::HashMap;
+
 let records = db.read_many(&["user1", "user2", "user3"]);
 
-// Update multiple records
 let updates = vec![
-    ("user1".to_string(), HashMap::from([("age".to_string(), serde_yaml::Value::Number(31.into()))])),
-    ("user2".to_string(), HashMap::from([("age".to_string(), serde_yaml::Value::Number(26.into()))])),
+    (
+        "user1".to_string(),
+        HashMap::from([("age".to_string(), serde_yaml::Value::Number(31.into()))]),
+    ),
+    (
+        "user2".to_string(),
+        HashMap::from([("age".to_string(), serde_yaml::Value::Number(26.into()))]),
+    ),
 ];
 let updated = db.update_many(updates)?;
 
-// Delete multiple records
 let deleted = db.delete_many(&["user1", "user2"])?;
 
-// Upsert (insert or update)
 let mut record = Record::new("user1");
 record.set("name", "Alice");
 db.upsert(record)?;
 ```
 
-### Statistics & Backup
+### 统计与备份
 
 ```rust
 use std::path::Path;
 
-// Get statistics
 let stats = db.stats();
 println!("Total records: {}", stats.total_records);
 println!("Unique keys: {:?}", stats.unique_keys);
 println!("File size: {:?} bytes", stats.file_size);
 
-// Backup
 db.backup(Path::new("backup.yaml"))?;
-
-// Clear all records
 db.clear()?;
 ```
 
-### Import/Export
+### 导入与导出
 
 ```rust
 use std::path::Path;
 
-// Import from JSON
 let count = db.import_json(Path::new("users.json"))?;
-println!("Imported {} records", count);
-
-// Import from YAML
 let count = db.import_yaml(Path::new("users.yaml"))?;
 
-// Export to JSON
 db.export_json(Path::new("backup.json"))?;
-
-// Export to YAML
 db.export_yaml(Path::new("backup.yaml"))?;
 ```
 
-## ODBC Driver
+## ODBC 驱动
 
-YamlDB includes an ODBC driver for SQL-based access.
+YamlDB 提供 ODBC 驱动，可用简单 SQL 读取 YAML 数据。
 
-### Connection String
+### 连接字符串
 
-```
+```text
 DRIVER={YamlDB};DBQ=data.yaml;
 DRIVER={YamlDB};FILE=data.yaml;
 ```
 
-### Supported SQL
+### 支持的 SQL
 
 ```sql
--- Select all
 SELECT * FROM data
-
--- Where clause
 SELECT * FROM data WHERE city = 'Beijing'
-
--- Comparison operators
 SELECT * FROM data WHERE age > 25
 SELECT * FROM data WHERE age >= 28
 SELECT * FROM data WHERE age < 30
 SELECT * FROM data WHERE age <= 25
 SELECT * FROM data WHERE city != 'Shanghai'
-
--- AND/OR conditions
 SELECT * FROM data WHERE city = 'Beijing' AND age >= 28
 SELECT * FROM data WHERE city = 'Beijing' OR city = 'Shanghai'
 ```
 
-### Build Shared Library
+### 构建共享库
 
 ```bash
 cargo build --release
 ```
 
-Output:
-- Windows: `target/release/yamldb.dll`
-- Linux: `target/release/libyamldb.so`
-- macOS: `target/release/libyamldb.dylib`
+输出文件：
 
-### Register Driver
+- Windows：`target/release/yamldb.dll`
+- Linux：`target/release/libyamldb.so`
+- macOS：`target/release/libyamldb.dylib`
 
-**Windows:**
-1. Open ODBC Data Source Administrator
-2. Go to "Drivers" tab
-3. Click "Add"
-4. Browse to `yamldb.dll`
+### 注册驱动
 
-**Linux:**
-Add to `/etc/odbcinst.ini`:
+Windows：
+
+1. 打开 ODBC 数据源管理器。
+2. 进入 Drivers 选项卡。
+3. 点击 Add。
+4. 选择 `yamldb.dll`。
+
+Linux：
+
+在 `/etc/odbcinst.ini` 中添加：
+
 ```ini
 [YamlDB]
 Description=YamlDB ODBC Driver
 Driver=/path/to/libyamldb.so
 ```
 
-### Usage Example (Python)
+### Python 示例
 
 ```python
 import pyodbc
@@ -408,7 +371,7 @@ for row in cursor:
 conn.close()
 ```
 
-### Usage Example (C#)
+### C# 示例
 
 ```csharp
 using System.Data.Odbc;
@@ -427,20 +390,20 @@ while (reader.Read())
 conn.Close();
 ```
 
-## JDBC Driver
+## JDBC 驱动
 
-YamlDB includes a dependency-free JDBC driver for SQL-based access from Java.
+YamlDB 提供一个无外部依赖的 JDBC 驱动，可供 Java 通过 SQL 读取 YAML 数据。
 
-### Connection URL
+### 连接 URL
 
 ```text
 jdbc:yamldb:data.yaml
 jdbc:yamldb:file:data.yaml
 ```
 
-### Supported SQL
+### 支持的 SQL
 
-The JDBC driver supports the same small read-only SQL subset as the ODBC driver:
+JDBC 驱动支持和 ODBC 类似的只读 SQL 子集：
 
 ```sql
 SELECT * FROM data
@@ -450,27 +413,27 @@ SELECT * FROM data WHERE city = 'Beijing' AND age >= 28
 SELECT * FROM data WHERE city = 'Beijing' OR city = 'Shanghai'
 ```
 
-### Build JDBC Jar
+### 构建 JDBC Jar
 
-Windows:
+Windows：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File jdbc\build.ps1
 ```
 
-Linux/macOS:
+Linux/macOS：
 
 ```bash
 bash jdbc/build.sh
 ```
 
-Output:
+输出文件：
 
 ```text
 jdbc/target/yamldb-jdbc.jar
 ```
 
-### Java Example
+### Java 示例
 
 ```java
 import java.sql.Connection;
@@ -489,7 +452,7 @@ try (Connection conn = DriverManager.getConnection("jdbc:yamldb:data.yaml");
 }
 ```
 
-## Data Format
+## 数据格式
 
 ### YAML
 
@@ -513,7 +476,7 @@ try (Connection conn = DriverManager.getConnection("jdbc:yamldb:data.yaml");
 ]
 ```
 
-## Error Handling
+## 错误处理
 
 ```rust
 use yamldb::{YamlDb, YamlDbError};
@@ -529,20 +492,22 @@ match db.create(record) {
 }
 ```
 
-## Project Structure
+## 项目结构
 
-```
+```text
 yamldb/
 ├── src/
-│   ├── lib.rs      # Core library
-│   ├── main.rs     # CLI tool
-│   └── odbc.rs     # ODBC driver
+│   ├── lib.rs      # 核心库
+│   ├── main.rs     # CLI 工具
+│   └── odbc.rs     # ODBC 驱动
 ├── tests/
-│   ├── integration.rs  # Unit tests
-│   └── odbc.rs         # ODBC tests
+│   ├── integration.rs
+│   └── odbc.rs
+├── examples/
+│   └── odbc_usage.rs
 ├── jdbc/
-│   ├── src/main/java   # JDBC driver
-│   └── src/test/java   # JDBC smoke test
+│   ├── src/main/java   # JDBC 驱动
+│   └── src/test/java   # JDBC 冒烟测试
 ├── Cargo.toml
 ├── README.md
 ├── README.zh-CN.md
@@ -550,6 +515,13 @@ yamldb/
 └── LICENSE
 ```
 
-## License
+## 注意事项
+
+- YamlDB 适合轻量数据、配置型数据和测试数据，不适合作为高并发或大规模数据库。
+- YAML 文件便于人工编辑，但并发写入需要由调用方控制。
+- ODBC SQL 支持的是项目内实现的简单子集，不等同于完整 SQL 数据库。
+- JDBC SQL 支持的是项目内实现的简单只读子集，不等同于完整 SQL 数据库。
+
+## 许可证
 
 MIT

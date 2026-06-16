@@ -1,6 +1,11 @@
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use yamldb::{QueryOp, Record, YamlDb};
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("yamldb-{}-{}", std::process::id(), name))
+    }
 
     #[test]
     fn test_create_and_read() {
@@ -21,7 +26,12 @@ mod tests {
         record.set("name", "Alice");
         db.create(record).unwrap();
 
-        db.update_field("user1", "name", serde_yaml::Value::String("Bob".to_string())).unwrap();
+        db.update_field(
+            "user1",
+            "name",
+            serde_yaml::Value::String("Bob".to_string()),
+        )
+        .unwrap();
         let record = db.read("user1").unwrap();
         assert_eq!(record.get_str("name"), Some("Bob"));
     }
@@ -263,6 +273,47 @@ mod tests {
     }
 
     #[test]
+    fn test_query_result_page_zero_is_empty() {
+        let mut db = YamlDb::memory();
+        let record = Record::new("user1");
+        db.create(record).unwrap();
+
+        let result = db.query(&QueryOp::and(vec![]));
+        assert!(result.page(0, 10).is_empty());
+        assert!(result.page(1, 0).is_empty());
+    }
+
+    #[test]
+    fn test_read_all_is_sorted_by_id() {
+        let mut db = YamlDb::memory();
+        db.create(Record::new("user2")).unwrap();
+        db.create(Record::new("user1")).unwrap();
+
+        let ids: Vec<&str> = db
+            .read_all()
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["user1", "user2"]);
+    }
+
+    #[test]
+    fn test_memory_export_yaml_writes_records() {
+        let path = temp_path("memory-export.yaml");
+        let mut db = YamlDb::memory();
+        db.create(Record::new("user2")).unwrap();
+        db.create(Record::new("user1")).unwrap();
+
+        db.export_yaml(&path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("id: user1"));
+        assert!(content.contains("id: user2"));
+        assert!(content.find("id: user1") < content.find("id: user2"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn test_record_merge() {
         let mut r1 = Record::new("user1");
         r1.set("name", "Alice").set("age", 30);
@@ -308,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_not_found_error() {
-        let mut db = YamlDb::memory();
+        let db = YamlDb::memory();
         assert!(db.read("nonexistent").is_err());
     }
 }

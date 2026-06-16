@@ -16,28 +16,56 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: yamldb-linux
+            odbc_artifact: libyamldb-linux-odbc.so
             ext: ''
+            dylib: libyamldb.so
           - os: windows-latest
             artifact: yamldb-windows.exe
+            odbc_artifact: yamldb-windows-odbc.dll
             ext: '.exe'
+            dylib: yamldb.dll
           - os: macos-latest
             artifact: yamldb-macos
+            odbc_artifact: libyamldb-macos-odbc.dylib
             ext: ''
+            dylib: libyamldb.dylib
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
       - run: cargo test --verbose
       - run: cargo clippy -- -D warnings
       - run: cargo build --release
-      - name: Rename artifact
+      - name: Rename artifacts
         run: cp target/release/yamldb${{ matrix.ext }} ${{ matrix.artifact }}
+      - name: Rename ODBC driver
+        run: cp target/release/${{ matrix.dylib }} ${{ matrix.odbc_artifact }}
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: ${{ matrix.os }}-artifacts
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.odbc_artifact }}
+
+  build-jdbc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: bash jdbc/build.sh
+      - run: cp jdbc/target/yamldb-jdbc.jar yamldb-jdbc.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jdbc-artifact
+          path: yamldb-jdbc.jar
 
   release:
-    needs: build
+    needs: [build, build-jdbc]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -47,4 +75,6 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: yamldb-*
+          files: |
+            yamldb-*
+            libyamldb-*

@@ -1,7 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use yamldb::{QueryOp, Record, YamlDb};
 
 #[derive(Parser)]
@@ -78,62 +77,58 @@ enum Commands {
     },
 }
 
-fn parse_fields(fields: &[String]) -> HashMap<String, serde_yaml::Value> {
+fn parse_value(value: &str) -> serde_yaml::Value {
+    if let Ok(n) = value.parse::<i64>() {
+        serde_yaml::Value::Number(n.into())
+    } else if let Ok(f) = value.parse::<f64>() {
+        serde_yaml::Value::Number(serde_yaml::Number::from(f))
+    } else if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+        serde_yaml::Value::Bool(value.eq_ignore_ascii_case("true"))
+    } else {
+        serde_yaml::Value::String(value.to_string())
+    }
+}
+
+fn parse_fields(
+    fields: &[String],
+) -> Result<HashMap<String, serde_yaml::Value>, Box<dyn std::error::Error>> {
     let mut map = HashMap::new();
     for field in fields {
-        if let Some((key, value)) = field.split_once('=') {
-            let val = if let Ok(n) = value.parse::<i64>() {
-                serde_yaml::Value::Number(n.into())
-            } else if value == "true" || value == "false" {
-                serde_yaml::Value::Bool(value == "true")
-            } else {
-                serde_yaml::Value::String(value.to_string())
-            };
-            map.insert(key.to_string(), val);
+        let Some((key, value)) = field.split_once('=') else {
+            return Err(format!("Invalid field '{}', expected key=value", field).into());
+        };
+        if key.trim().is_empty() {
+            return Err(format!("Invalid field '{}', key cannot be empty", field).into());
         }
+        map.insert(key.trim().to_string(), parse_value(value.trim()));
     }
-    map
+    Ok(map)
 }
 
 fn format_record(record: &Record, format: Option<&str>) -> String {
     match format {
         Some("json") => record.to_json().unwrap_or_default(),
-        _ => format!("{}: {}", record.id, serde_yaml::to_string(&record.data).unwrap_or_default()),
+        _ => format!(
+            "{}: {}",
+            record.id,
+            serde_yaml::to_string(&record.data).unwrap_or_default()
+        ),
     }
 }
 
-fn import_records(db: &mut YamlDb, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let content = fs::read_to_string(path)?;
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+fn import_records(db: &mut YamlDb, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
 
-    match ext {
+    match ext.as_str() {
         "json" => {
-            let records: Vec<serde_json::Value> = serde_json::from_str(&content)?;
-            for item in records {
-                if let Some(obj) = item.as_object() {
-                    let id = obj
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .ok_or("Missing 'id' field")?
-                        .to_string();
-                    let data: HashMap<String, serde_yaml::Value> = obj
-                        .iter()
-                        .filter(|(k, _)| *k != "id")
-                        .map(|(k, v)| {
-                            let yaml_val: serde_yaml::Value =
-                                serde_yaml::to_value(v).unwrap_or(serde_yaml::Value::Null);
-                            (k.clone(), yaml_val)
-                        })
-                        .collect();
-                    db.create(Record { id, data })?;
-                }
-            }
+            db.import_json(path)?;
         }
         "yaml" | "yml" => {
-            let records: Vec<Record> = serde_yaml::from_str(&content)?;
-            for record in records {
-                db.create(record)?;
-            }
+            db.import_yaml(path)?;
         }
         _ => return Err(format!("Unsupported format: {}", ext).into()),
     }
@@ -148,8 +143,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Create { id, fields } => {
-            let data = parse_fields(&fields);
-            db.create(Record { id: id.clone(), data })?;
+            let data = parse_fields(&fields)?;
+            db.create(Record {
+                id: id.clone(),
+                data,
+            })?;
             println!("Created record: {}", id);
         }
         Commands::Get { id, format } => {
@@ -172,7 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Update { id, fields } => {
-            let data = parse_fields(&fields);
+            let data = parse_fields(&fields)?;
             db.update(&id, data)?;
             println!("Updated record: {}", id);
         }
@@ -182,12 +180,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Query { key, value, op } => {
             let query_op = match op.as_deref() {
-                Some("ne") => QueryOp::ne(key, value),
-                Some("gt") => QueryOp::gt(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
-                Some("lt") => QueryOp::lt(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
-                Some("gte") => QueryOp::gte(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
-                Some("lte") => QueryOp::lte(key, serde_yaml::Value::Number(value.parse::<i64>().unwrap_or(0).into())),
+                Some("ne") => QueryOp::ne(key, parse_value(&value)),
+                Some("gt") => QueryOp::gt(key, parse_value(&value)),
+                Some("lt") => QueryOp::lt(key, parse_value(&value)),
+                Some("gte") => QueryOp::gte(key, parse_value(&value)),
+                Some("lte") => QueryOp::lte(key, parse_value(&value)),
                 Some("contains") => QueryOp::contains(key, value),
+                Some(other) => return Err(format!("Unsupported query operator: {}", other).into()),
                 _ => QueryOp::eq(key, value),
             };
             let results = db.query(&query_op);

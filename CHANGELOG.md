@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-06-16
+
+### Added
+- Dependency-free JDBC driver with `jdbc:yamldb:` URLs and read-only `SELECT * FROM data` support.
+- JDBC build scripts for Windows and Unix-like environments.
+- JDBC smoke test and GitHub Actions CI job.
+- Chinese documentation (`README.zh-CN.md`).
+- Release artifacts for ODBC shared libraries and JDBC jar.
+
+### Changed
+- Release workflow now publishes CLI binaries, ODBC drivers, and `yamldb-jdbc.jar`.
+- Package metadata is synchronized for Cargo publishing.
+- YAML/JSON export and query output are ordered by record id for stable results.
+
+### Fixed
+- `QueryResult::page` now handles zero page or page size safely.
+- YAML save, backup, and export now use a safer write path.
+- `YamlDb::memory().export_yaml(...)` now writes records correctly.
+- CLI field parsing now reports invalid `key=value` input instead of silently ignoring it.
+- CLI query operators no longer coerce invalid comparison values to zero.
+- Clippy and Rust 2024 warnings in tests and examples.
+
 ## [0.7.0] - 2026-06-15
 
 ### Added

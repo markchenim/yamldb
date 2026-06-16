@@ -24,20 +24,24 @@ fn setup_test_yaml(path: &str) {
     std::fs::write(path, content).unwrap();
 }
 
-unsafe fn alloc_handles() -> (*mut c_void, *mut c_void, *mut c_void) {
+fn alloc_handles() -> (*mut c_void, *mut c_void, *mut c_void) {
     let mut env: *mut c_void = ptr::null_mut();
     let mut dbc: *mut c_void = ptr::null_mut();
     let mut stmt: *mut c_void = ptr::null_mut();
-    SQLAllocHandle(SQL_HANDLE_ENV, ptr::null_mut(), &mut env);
-    SQLAllocHandle(SQL_HANDLE_DBC, env, &mut dbc);
-    SQLAllocHandle(SQL_HANDLE_STMT, dbc, &mut stmt);
+    unsafe {
+        SQLAllocHandle(SQL_HANDLE_ENV, ptr::null_mut(), &mut env);
+        SQLAllocHandle(SQL_HANDLE_DBC, env, &mut dbc);
+        SQLAllocHandle(SQL_HANDLE_STMT, dbc, &mut stmt);
+    }
     (env, dbc, stmt)
 }
 
-unsafe fn free_handles(env: *mut c_void, dbc: *mut c_void, stmt: *mut c_void) {
-    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-    SQLFreeHandle(SQL_HANDLE_ENV, env);
+fn free_handles(env: *mut c_void, dbc: *mut c_void, stmt: *mut c_void) {
+    unsafe {
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+    }
 }
 
 #[test]
@@ -58,7 +62,11 @@ fn test_odbc_driver() {
             );
 
             let query = cstr("SELECT * FROM data");
-            assert_eq!(SQLExecDirect(stmt, query.as_ptr(), -1), SQL_SUCCESS, "exec select all");
+            assert_eq!(
+                SQLExecDirect(stmt, query.as_ptr(), -1),
+                SQL_SUCCESS,
+                "exec select all"
+            );
 
             let mut col_count: c_int = 0;
             SQLNumResultCols(stmt, &mut col_count);
@@ -92,7 +100,11 @@ fn test_odbc_driver() {
             SQLConnect(dbc, dsn.as_ptr(), -1, ptr::null(), -1, ptr::null(), -1);
 
             let query = cstr("SELECT * FROM data WHERE city = 'Beijing'");
-            assert_eq!(SQLExecDirect(stmt, query.as_ptr(), -1), SQL_SUCCESS, "exec where");
+            assert_eq!(
+                SQLExecDirect(stmt, query.as_ptr(), -1),
+                SQL_SUCCESS,
+                "exec where"
+            );
 
             let mut row_count: c_int = 0;
             SQLRowCount(stmt, &mut row_count);
@@ -126,7 +138,11 @@ fn test_odbc_driver() {
             );
 
             let query = cstr("SELECT * FROM data WHERE age > 28");
-            assert_eq!(SQLExecDirect(stmt, query.as_ptr(), -1), SQL_SUCCESS, "exec age > 28");
+            assert_eq!(
+                SQLExecDirect(stmt, query.as_ptr(), -1),
+                SQL_SUCCESS,
+                "exec age > 28"
+            );
 
             let mut row_count: c_int = 0;
             SQLRowCount(stmt, &mut row_count);
@@ -232,13 +248,29 @@ fn test_odbc_driver() {
     // Test 6: Invalid handles
     unsafe {
         assert_eq!(
-            SQLConnect(ptr::null_mut(), ptr::null(), -1, ptr::null(), -1, ptr::null(), -1),
+            SQLConnect(
+                ptr::null_mut(),
+                ptr::null(),
+                -1,
+                ptr::null(),
+                -1,
+                ptr::null(),
+                -1
+            ),
             SQL_ERROR,
             "null connect"
         );
-        assert_eq!(SQLExecDirect(ptr::null_mut(), ptr::null(), -1), SQL_ERROR, "null exec");
+        assert_eq!(
+            SQLExecDirect(ptr::null_mut(), ptr::null(), -1),
+            SQL_ERROR,
+            "null exec"
+        );
         assert_eq!(SQLFetch(ptr::null_mut()), SQL_ERROR, "null fetch");
         assert_eq!(SQLDisconnect(ptr::null_mut()), SQL_ERROR, "null disconnect");
-        assert_eq!(SQLFreeHandle(SQL_HANDLE_DBC, ptr::null_mut()), SQL_ERROR, "null free");
+        assert_eq!(
+            SQLFreeHandle(SQL_HANDLE_DBC, ptr::null_mut()),
+            SQL_ERROR,
+            "null free"
+        );
     }
 }

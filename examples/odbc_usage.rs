@@ -1,6 +1,3 @@
-use std::ffi::CString;
-use std::ptr;
-
 fn main() {
     println!("YamlDB ODBC Driver Example");
     println!("=========================");

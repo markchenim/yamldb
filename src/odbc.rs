@@ -80,13 +80,19 @@ fn parse_condition(cond: &str) -> Option<QueryOp> {
         let idx = lower.find(" and ").unwrap();
         let left = &cond[..idx];
         let right = &cond[idx + 5..];
-        let ops: Vec<QueryOp> = [left, right].iter().filter_map(|p| parse_cmp(p.trim())).collect();
+        let ops: Vec<QueryOp> = [left, right]
+            .iter()
+            .filter_map(|p| parse_cmp(p.trim()))
+            .collect();
         Some(QueryOp::and(ops))
     } else if lower.contains(" or ") {
         let idx = lower.find(" or ").unwrap();
         let left = &cond[..idx];
         let right = &cond[idx + 4..];
-        let ops: Vec<QueryOp> = [left, right].iter().filter_map(|p| parse_cmp(p.trim())).collect();
+        let ops: Vec<QueryOp> = [left, right]
+            .iter()
+            .filter_map(|p| parse_cmp(p.trim()))
+            .collect();
         Some(QueryOp::or(ops))
     } else {
         parse_cmp(cond)
@@ -305,7 +311,11 @@ pub unsafe extern "C" fn SQLExecDirect(
             };
             let db = db.lock().unwrap();
             let result = db.query(&query_op);
-            result.to_vec().into_iter().cloned().collect::<Vec<Record>>()
+            result
+                .to_vec()
+                .into_iter()
+                .cloned()
+                .collect::<Vec<Record>>()
         };
 
         let columns = if let Some(first) = records.first() {

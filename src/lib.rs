@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -39,7 +40,11 @@ impl Record {
         }
     }
 
-    pub fn set(&mut self, key: impl Into<String>, value: impl Into<serde_yaml::Value>) -> &mut Self {
+    pub fn set(
+        &mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_yaml::Value>,
+    ) -> &mut Self {
         self.data.insert(key.into(), value.into());
         self
     }
@@ -154,8 +159,12 @@ impl QueryOp {
         match self {
             QueryOp::Eq(key, value) => record.data.get(key).map(|v| v == value).unwrap_or(false),
             QueryOp::Ne(key, value) => record.data.get(key).map(|v| v != value).unwrap_or(true),
-            QueryOp::Gt(key, value) => compare_values(record.data.get(key), value, std::cmp::Ordering::Greater),
-            QueryOp::Lt(key, value) => compare_values(record.data.get(key), value, std::cmp::Ordering::Less),
+            QueryOp::Gt(key, value) => {
+                compare_values(record.data.get(key), value, std::cmp::Ordering::Greater)
+            }
+            QueryOp::Lt(key, value) => {
+                compare_values(record.data.get(key), value, std::cmp::Ordering::Less)
+            }
             QueryOp::Gte(key, value) => {
                 compare_values(record.data.get(key), value, std::cmp::Ordering::Greater)
                     || record.data.get(key).map(|v| v == value).unwrap_or(false)
@@ -253,8 +262,16 @@ impl<'a> QueryResult<'a> {
     }
 
     pub fn page(&self, page: usize, page_size: usize) -> Vec<&'a Record> {
+        if page == 0 || page_size == 0 {
+            return Vec::new();
+        }
         let start = (page - 1) * page_size;
-        self.records.iter().skip(start).take(page_size).copied().collect()
+        self.records
+            .iter()
+            .skip(start)
+            .take(page_size)
+            .copied()
+            .collect()
     }
 
     pub fn to_vec(&self) -> Vec<&'a Record> {
@@ -322,9 +339,7 @@ impl YamlDb {
             Some(p) => p,
             None => return Ok(()),
         };
-        let records: Vec<&Record> = self.records.values().collect();
-        let content = serde_yaml::to_string(&records)?;
-        fs::write(path, content)?;
+        self.write_yaml(path)?;
         Ok(())
     }
 
@@ -348,16 +363,18 @@ impl YamlDb {
     }
 
     pub fn read_all(&self) -> Vec<&Record> {
-        self.records.values().collect()
+        self.sorted_records()
     }
 
     pub fn read_many(&self, ids: &[&str]) -> Vec<&Record> {
-        ids.iter()
-            .filter_map(|id| self.records.get(*id))
-            .collect()
+        ids.iter().filter_map(|id| self.records.get(*id)).collect()
     }
 
-    pub fn update(&mut self, id: &str, data: HashMap<String, serde_yaml::Value>) -> Result<(), YamlDbError> {
+    pub fn update(
+        &mut self,
+        id: &str,
+        data: HashMap<String, serde_yaml::Value>,
+    ) -> Result<(), YamlDbError> {
         let record = self
             .records
             .get_mut(id)
@@ -366,7 +383,12 @@ impl YamlDb {
         self.save()
     }
 
-    pub fn update_field(&mut self, id: &str, key: &str, value: serde_yaml::Value) -> Result<(), YamlDbError> {
+    pub fn update_field(
+        &mut self,
+        id: &str,
+        key: &str,
+        value: serde_yaml::Value,
+    ) -> Result<(), YamlDbError> {
         let record = self
             .records
             .get_mut(id)
@@ -375,7 +397,10 @@ impl YamlDb {
         self.save()
     }
 
-    pub fn update_many(&mut self, updates: Vec<(String, HashMap<String, serde_yaml::Value>)>) -> Result<usize, YamlDbError> {
+    pub fn update_many(
+        &mut self,
+        updates: Vec<(String, HashMap<String, serde_yaml::Value>)>,
+    ) -> Result<usize, YamlDbError> {
         let mut count = 0;
         for (id, data) in updates {
             if let Some(record) = self.records.get_mut(&id) {
@@ -410,7 +435,11 @@ impl YamlDb {
     }
 
     pub fn query(&self, op: &QueryOp) -> QueryResult<'_> {
-        let records: Vec<&Record> = self.records.values().filter(|r| op.matches(r)).collect();
+        let records: Vec<&Record> = self
+            .sorted_records()
+            .into_iter()
+            .filter(|r| op.matches(r))
+            .collect();
         QueryResult { records }
     }
 
@@ -418,14 +447,19 @@ impl YamlDb {
     where
         F: Fn(&Record) -> bool,
     {
-        let records: Vec<&Record> = self.records.values().filter(|r| filter(r)).collect();
+        let records: Vec<&Record> = self
+            .sorted_records()
+            .into_iter()
+            .filter(|r| filter(r))
+            .collect();
         QueryResult { records }
     }
 
     pub fn search(&self, key: &str, keyword: &str) -> QueryResult<'_> {
         let keyword_lower = keyword.to_lowercase();
-        let records: Vec<&Record> = self.records
-            .values()
+        let records: Vec<&Record> = self
+            .sorted_records()
+            .into_iter()
             .filter(|r| {
                 r.data
                     .get(key)
@@ -439,8 +473,9 @@ impl YamlDb {
 
     pub fn search_all(&self, keyword: &str) -> QueryResult<'_> {
         let keyword_lower = keyword.to_lowercase();
-        let records: Vec<&Record> = self.records
-            .values()
+        let records: Vec<&Record> = self
+            .sorted_records()
+            .into_iter()
             .filter(|r| {
                 r.id.to_lowercase().contains(&keyword_lower)
                     || r.data.values().any(|v| {
@@ -481,7 +516,9 @@ impl YamlDb {
         let mut unique_keys: Vec<String> = all_keys.into_iter().collect();
         unique_keys.sort();
 
-        let file_size = self.path.as_ref()
+        let file_size = self
+            .path
+            .as_ref()
             .and_then(|p| fs::metadata(p).ok())
             .map(|m| m.len());
 
@@ -494,9 +531,7 @@ impl YamlDb {
     }
 
     pub fn backup(&self, backup_path: &Path) -> Result<(), YamlDbError> {
-        let records: Vec<&Record> = self.records.values().collect();
-        let content = serde_yaml::to_string(&records)?;
-        fs::write(backup_path, content)?;
+        self.write_yaml(backup_path)?;
         Ok(())
     }
 
@@ -540,17 +575,53 @@ impl YamlDb {
     }
 
     pub fn export_json(&self, path: &Path) -> Result<(), YamlDbError> {
-        let records: Vec<&Record> = self.records.values().collect();
+        let records = self.sorted_records();
         let content = serde_json::to_string_pretty(&records)?;
         fs::write(path, content)?;
         Ok(())
     }
 
     pub fn export_yaml(&self, path: &Path) -> Result<(), YamlDbError> {
-        self.save()?;
-        if let Some(src) = &self.path {
-            fs::copy(src, path)?;
-        }
+        self.write_yaml(path)?;
         Ok(())
     }
+
+    fn sorted_records(&self) -> Vec<&Record> {
+        let mut records: Vec<&Record> = self.records.values().collect();
+        records.sort_by(|a, b| a.id.cmp(&b.id));
+        records
+    }
+
+    fn write_yaml(&self, path: &Path) -> Result<(), YamlDbError> {
+        let records = self.sorted_records();
+        let content = serde_yaml::to_string(&records)?;
+        write_file_atomically(path, content.as_bytes())?;
+        Ok(())
+    }
+}
+
+fn write_file_atomically(path: &Path, content: &[u8]) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+
+    let tmp_path = path.with_extension(format!(
+        "{}tmp",
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}."))
+            .unwrap_or_default()
+    ));
+
+    {
+        let mut file = fs::File::create(&tmp_path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+    }
+
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(tmp_path, path)?;
+    Ok(())
 }

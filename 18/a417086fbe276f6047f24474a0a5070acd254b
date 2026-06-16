@@ -1,0 +1,76 @@
+tests/odbc.rs
+  s_3c02cea94386f9::t_e48a36f448fea5 27,31-35,39-44
+  s_3c02cea94386f9::t_9070a26fc74e77 65-69,103-107,141-145,251-259,263-267,270-274
+Cargo.toml
+  s_3c02cea94386f9::t_9745aa538a89c1 5-10
+  s_3c02cea94386f9::t_0e83f601c11ba0 3
+README.zh-CN.md
+  s_3c02cea94386f9::t_e40e42d2cbe74a 1-8,10-20,22-34,40-392,457-507,511-522,524-527
+  s_3c02cea94386f9::t_c5c1a4048e40cb 9,21,35-39,393-453,456,508-510,523
+  s_3c02cea94386f9::t_d32e82c105ae29 454-455
+jdbc/src/main/java/io/github/markchenim/yamldb/jdbc/YamlDbJdbcProxies.java
+  s_3c02cea94386f9::t_90a01bb61da3fe 1-415
+CHANGELOG.md
+  s_3c02cea94386f9::t_0e83f601c11ba0 5-26
+tests/integration.rs
+  s_3c02cea94386f9::t_850e5d4066f552 3,6-9,275-291,297-313
+  s_3c02cea94386f9::t_9070a26fc74e77 29-34,292-296
+  s_3c02cea94386f9::t_2caf4d6d3695a2 362
+src/lib.rs
+  s_3c02cea94386f9::t_835c36ace79b58 534,578,585,588-626
+  s_3c02cea94386f9::t_545a18215b2d5b 265-267
+  s_3c02cea94386f9::t_9070a26fc74e77 43-47,162-167,269-274,370,373-377,386-391,400-403,519-521
+  s_3c02cea94386f9::t_ba4ba827ae597a 342,366
+  s_3c02cea94386f9::t_47991c14588d9b 438-442,450-454,460-462,476-478
+.github/workflows/release.yml
+  s_3c02cea94386f9::t_5cf3f1620f67e1 78-80
+  s_3c02cea94386f9::t_38ed495473d6b9 35-36
+  s_3c02cea94386f9::t_3c4effa79dfb33 37
+  s_3c02cea94386f9::t_08ffbff833ddce 52-61,64-65,68
+  s_3c02cea94386f9::t_36fefc534fc154 19,21,24,26,29,31,41,43-50
+jdbc/src/test/java/io/github/markchenim/yamldb/jdbc/YamlDbJdbcDriverTest.java
+  s_3c02cea94386f9::t_90a01bb61da3fe 1-58
+.github/workflows/ci.yml
+  s_3c02cea94386f9::t_61b07f8b249ea9 23
+  s_3c02cea94386f9::t_eefe7dfe6a6166 21-22
+  s_3c02cea94386f9::t_08ffbff833ddce 26-35
+README.md
+  s_3c02cea94386f9::t_d32e82c105ae29 491
+  s_3c02cea94386f9::t_e40e42d2cbe74a 3-4
+  s_3c02cea94386f9::t_c5c1a4048e40cb 9,21,35-39,430-490,543-545,548
+src/odbc.rs
+  s_3c02cea94386f9::t_9070a26fc74e77 83-86,92-95,314-318
+jdbc/src/main/java/io/github/markchenim/yamldb/jdbc/YamlDbSql.java
+  s_3c02cea94386f9::t_90a01bb61da3fe 1-177
+src/main.rs
+  s_3c02cea94386f9::t_813d4599c85517 3,119
+  s_3c02cea94386f9::t_22a3d05a0492aa 146,173,183-187,189
+  s_3c02cea94386f9::t_722ff2804d8a64 80-94,97-101,103,105
+  s_3c02cea94386f9::t_9070a26fc74e77 111-115,147-150
+  s_3c02cea94386f9::t_c033a491e73d72 120-124,126,128,131
+jdbc/build.ps1
+  s_3c02cea94386f9::t_901868f5f56f62 13,19
+  s_3c02cea94386f9::t_90a01bb61da3fe 1-12,14-18,20-22
+jdbc/build.sh
+  s_3c02cea94386f9::t_90a01bb61da3fe 1-20
+jdbc/src/main/java/io/github/markchenim/yamldb/jdbc/YamlDbJdbcDriver.java
+  s_3c02cea94386f9::t_90a01bb61da3fe 1-68
+jdbc/src/main/resources/META-INF/services/java.sql.Driver
+  s_3c02cea94386f9::t_90a01bb61da3fe 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "18a417086fbe276f6047f24474a0a5070acd254b",
+  "prompts": {},
+  "sessions": {
+    "s_3c02cea94386f9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ece0e-696a-7661-8da3-a90d273282e0",
+        "model": "gpt-5.5"
+      },
+      "human_author": "hongliangchen <hongliang.chen@fussengroup.com>"
+    }
+  }
+}

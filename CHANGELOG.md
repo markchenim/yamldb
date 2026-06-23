@@ -18,6 +18,9 @@ All notable changes to this project will be documented in this file.
 - ODBC/JDBC SQL handling now supports `SELECT * FROM <table>` for directory sources and rejects unsupported select shapes more strictly.
 - Documentation now covers DBeaver setup, table mapping, Web UI usage, `yq` lookup, and CLI directory workflows.
 
+### Notes
+- The v0.10.0 code can use a bundled or explicitly configured `yq`, but the published v0.10.0 release assets do not include `yq` binaries. Users must install `yq`, place it next to the CLI/ODBC driver or in the expected JDBC resource path, or configure `YAMLDB_YQ` / `-Dyamldb.yq=/path/to/yq`.
+
 ## [0.9.0] - 2026-06-16
 
 ### Added

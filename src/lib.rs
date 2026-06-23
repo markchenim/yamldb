@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use thiserror::Error;
 
 pub mod odbc;
@@ -13,6 +14,8 @@ pub enum YamlDbError {
     Io(#[from] std::io::Error),
     #[error("YAML error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("yq error: {0}")]
+    Yq(String),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("Record not found: {0}")]
@@ -324,12 +327,11 @@ impl YamlDb {
             self.records = HashMap::new();
             return Ok(());
         }
-        let content = fs::read_to_string(path)?;
-        if content.trim().is_empty() {
+        if fs::read_to_string(path)?.trim().is_empty() {
             self.records = HashMap::new();
             return Ok(());
         }
-        let records: Vec<Record> = serde_yaml::from_str(&content)?;
+        let records = read_records_with_yq(path)?;
         self.records = records.into_iter().map(|r| (r.id.clone(), r)).collect();
         Ok(())
     }
@@ -564,8 +566,7 @@ impl YamlDb {
     }
 
     pub fn import_yaml(&mut self, path: &Path) -> Result<usize, YamlDbError> {
-        let content = fs::read_to_string(path)?;
-        let records: Vec<Record> = serde_yaml::from_str(&content)?;
+        let records = read_records_with_yq(path)?;
         let count = records.len();
         for record in records {
             self.records.insert(record.id.clone(), record);
@@ -594,9 +595,98 @@ impl YamlDb {
 
     fn write_yaml(&self, path: &Path) -> Result<(), YamlDbError> {
         let records = self.sorted_records();
-        let content = serde_yaml::to_string(&records)?;
+        let content = write_records_with_yq(&records)?;
         write_file_atomically(path, content.as_bytes())?;
         Ok(())
+    }
+}
+
+fn read_records_with_yq(path: &Path) -> Result<Vec<Record>, YamlDbError> {
+    let output = Command::new(yq_command())
+        .arg("-o=json")
+        .arg(".")
+        .arg(path)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(YamlDbError::Yq(command_stderr(output.stderr)));
+    }
+
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn write_records_with_yq(records: &[&Record]) -> Result<String, YamlDbError> {
+    let input = serde_json::to_vec(records)?;
+    let mut child = Command::new(yq_command())
+        .arg("-P")
+        .arg("-o=yaml")
+        .arg(".")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| YamlDbError::Yq("failed to open yq stdin".to_string()))?;
+        stdin.write_all(&input)?;
+    }
+
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(YamlDbError::Yq(command_stderr(output.stderr)));
+    }
+
+    String::from_utf8(output.stdout).map_err(|e| YamlDbError::Yq(e.to_string()))
+}
+
+fn yq_command() -> PathBuf {
+    if let Ok(path) = std::env::var("YAMLDB_YQ")
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path);
+    }
+
+    for dir in yq_candidate_dirs() {
+        let candidate = dir.join(yq_exe_name());
+        if candidate.is_file() {
+            return candidate;
+        }
+        let candidate = dir.join("bin").join(yq_exe_name());
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+
+    PathBuf::from(yq_exe_name())
+}
+
+fn yq_candidate_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        dirs.push(dir.to_path_buf());
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd);
+    }
+    dirs
+}
+
+fn yq_exe_name() -> &'static str {
+    if cfg!(windows) { "yq.exe" } else { "yq" }
+}
+
+fn command_stderr(stderr: Vec<u8>) -> String {
+    let message = String::from_utf8_lossy(&stderr).trim().to_string();
+    if message.is_empty() {
+        "yq command failed".to_string()
+    } else {
+        message
     }
 }
 

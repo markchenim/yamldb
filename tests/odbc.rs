@@ -273,4 +273,158 @@ fn test_odbc_driver() {
             "null free"
         );
     }
+
+    // Test 7: Column metadata scans all rows
+    {
+        let path = "test_odbc_columns.yaml";
+        std::fs::write(
+            path,
+            r#"- id: user1
+  name: Alice
+- id: user2
+  name: Bob
+  city: Shanghai
+"#,
+        )
+        .unwrap();
+
+        unsafe {
+            let (env, dbc, stmt) = alloc_handles();
+            let dsn = cstr(path);
+            assert_eq!(
+                SQLConnect(dbc, dsn.as_ptr(), -1, ptr::null(), -1, ptr::null(), -1),
+                SQL_SUCCESS,
+                "connect for columns"
+            );
+
+            let query = cstr("SELECT * FROM data");
+            assert_eq!(
+                SQLExecDirect(stmt, query.as_ptr(), -1),
+                SQL_SUCCESS,
+                "exec for columns"
+            );
+
+            let mut col_count: c_int = 0;
+            SQLNumResultCols(stmt, &mut col_count);
+            assert_eq!(col_count, 2, "columns from all rows");
+
+            SQLDisconnect(dbc);
+            free_handles(env, dbc, stmt);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    // Test 8: Reject unsupported SELECT shape
+    {
+        let path = "test_odbc_invalid_select.yaml";
+        setup_test_yaml(path);
+
+        unsafe {
+            let (env, dbc, stmt) = alloc_handles();
+            let dsn = cstr(path);
+            assert_eq!(
+                SQLConnect(dbc, dsn.as_ptr(), -1, ptr::null(), -1, ptr::null(), -1),
+                SQL_SUCCESS,
+                "connect for invalid select"
+            );
+
+            let query = cstr("SELECT name FROM data");
+            assert_eq!(
+                SQLExecDirect(stmt, query.as_ptr(), -1),
+                SQL_ERROR,
+                "reject select list"
+            );
+
+            SQLDisconnect(dbc);
+            free_handles(env, dbc, stmt);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    // Test 9: Directory source exposes each YAML file as a table
+    {
+        let dir = std::env::temp_dir().join(format!("yamldb-odbc-dir-{}", std::process::id()));
+        let path = dir.join("users.yaml");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"- id: user1
+  name: Alice
+  age: 30
+- id: user2
+  name: Bob
+  age: 25
+"#,
+        )
+        .unwrap();
+
+        unsafe {
+            let (env, dbc, stmt) = alloc_handles();
+            let dsn = cstr(&format!("DBQ={}", dir.display()));
+            assert_eq!(
+                SQLConnect(dbc, dsn.as_ptr(), -1, ptr::null(), -1, ptr::null(), -1),
+                SQL_SUCCESS,
+                "connect directory"
+            );
+
+            let query = cstr("SELECT * FROM users WHERE age >= 30");
+            assert_eq!(
+                SQLExecDirect(stmt, query.as_ptr(), -1),
+                SQL_SUCCESS,
+                "exec directory table"
+            );
+
+            let mut row_count: c_int = 0;
+            SQLRowCount(stmt, &mut row_count);
+            assert_eq!(row_count, 1, "directory table row count");
+
+            assert_eq!(
+                SQLTables(
+                    stmt,
+                    ptr::null(),
+                    -1,
+                    ptr::null(),
+                    -1,
+                    ptr::null(),
+                    -1,
+                    ptr::null(),
+                    -1
+                ),
+                SQL_SUCCESS,
+                "list directory tables"
+            );
+            let mut table_rows = 0;
+            while SQLFetch(stmt) == SQL_SUCCESS {
+                table_rows += 1;
+            }
+            assert_eq!(table_rows, 1, "directory metadata table count");
+
+            let table = cstr("users");
+            assert_eq!(
+                SQLColumns(
+                    stmt,
+                    ptr::null(),
+                    -1,
+                    ptr::null(),
+                    -1,
+                    table.as_ptr(),
+                    -1,
+                    ptr::null(),
+                    -1
+                ),
+                SQL_SUCCESS,
+                "list directory columns"
+            );
+            let mut column_rows = 0;
+            while SQLFetch(stmt) == SQL_SUCCESS {
+                column_rows += 1;
+            }
+            assert_eq!(column_rows, 2, "directory metadata column count");
+
+            SQLDisconnect(dbc);
+            free_handles(env, dbc, stmt);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

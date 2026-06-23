@@ -314,6 +314,39 @@ mod tests {
     }
 
     #[test]
+    fn test_load_yaml_file_with_nested_values() {
+        let path = temp_path("load-yq.yaml");
+        std::fs::write(
+            &path,
+            r#"- id: user1
+  name: "Alice: Smith"
+  active: true
+  tags:
+    - admin
+    - ops
+"#,
+        )
+        .unwrap();
+
+        let mut db = YamlDb::new(&path);
+        db.load().unwrap();
+
+        let record = db.read("user1").unwrap();
+        assert_eq!(record.get_str("name"), Some("Alice: Smith"));
+        assert_eq!(record.get_bool("active"), Some(true));
+        assert_eq!(
+            record
+                .get("tags")
+                .and_then(|v| v.as_sequence())
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn test_record_merge() {
         let mut r1 = Record::new("user1");
         r1.set("name", "Alice").set("age", 30);

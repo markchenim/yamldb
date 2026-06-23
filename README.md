@@ -22,6 +22,28 @@ A lightweight YAML file-based database with CLI tool, Rust API, ODBC driver, and
 
 ## Installation
 
+YamlDB uses `yq` v4 for YAML file parsing and formatting. Release packages may bundle `yq`; otherwise install the `yq` command and make sure it is available on `PATH`.
+
+Examples:
+
+```bash
+# macOS
+brew install yq
+
+# Linux with Homebrew
+brew install yq
+
+# Or download a yq v4 binary from https://github.com/mikefarah/yq
+yq --version
+```
+
+`yq` lookup order:
+
+1. `YAMLDB_YQ` environment variable.
+2. Bundled `yq` next to the CLI/ODBC driver, or in `bin/` next to it.
+3. For JDBC, bundled JAR resources under `bin/<os>-<arch>/yq`, for example `bin/linux-amd64/yq`.
+4. `yq` or `yq.exe` from `PATH`.
+
 ### From Cargo
 
 ```bash
@@ -38,34 +60,79 @@ Download pre-built binaries from [GitHub Releases](https://github.com/markchenim
 | Windows | `yamldb-windows.exe` | `yamldb-windows-odbc.dll` | `yamldb-jdbc.jar` |
 | macOS | `yamldb-macos` | `libyamldb-macos-odbc.dylib` | `yamldb-jdbc.jar` |
 
+## Data Sources And Tables
+
+YamlDB uses the same source mapping across CLI, Web UI, ODBC, and JDBC.
+
+| Source | Table names | Notes |
+|--------|-------------|-------|
+| Single YAML file, for example `data.yaml` | `data`; file stem such as `data` is also accepted by SQL drivers | CLI defaults to `data` |
+| Directory, for example `./yaml-data` | one table per direct child `.yaml/.yml` file | `users.yaml` becomes table `users` |
+
+Directory sources are not recursive. Put table files directly inside the selected directory:
+
+```text
+yaml-data/
+  users.yaml
+  teams.yml
+  projects.yaml
+```
+
+The equivalent access patterns are:
+
+```bash
+# CLI
+yamldb -f ./yaml-data -t users list
+
+# Web UI
+yamldb -f ./yaml-data webui
+```
+
+```sql
+-- ODBC/JDBC
+SELECT * FROM users
+```
+
+When creating data through CLI or Web UI, a missing table in a directory source is created as `<table>.yaml`.
+
+### Capability Matrix
+
+| Surface | Single file | Directory tables | Write support | Table metadata |
+|---------|-------------|------------------|---------------|----------------|
+| CLI | yes | yes, via `--table` | yes | `tables` command |
+| Web UI | yes | yes, table selector | yes | table selector |
+| ODBC | yes | yes, `SELECT * FROM <table>` | read-only | `SQLTables` / `SQLColumns` |
+| JDBC | yes | yes, `SELECT * FROM <table>` | read-only | `DatabaseMetaData` |
+
 ## CLI Usage
 
 ### Global Options
 
 ```
 -f, --file <FILE>  Specify YAML file path [default: data.yaml]
+-t, --table <TABLE>  Select a table when --file points to a YAML directory [default: data]
 ```
+
+The `--table` option is global, so it can be placed before or after the subcommand.
 
 ### Record Operations
 
 ```bash
-# Create
+# Single-file source
 yamldb create user1 --fields name=Alice,age=30,city=Beijing
-
-# Read
 yamldb get user1
-yamldb get user1 --format json
-
-# List
 yamldb list
 yamldb list --limit 10
 yamldb list --format json
-
-# Update
 yamldb update user1 --fields age=31,city=Guangzhou
-
-# Delete
 yamldb delete user1
+
+# Directory source
+yamldb -f ./yaml-data tables
+yamldb -f ./yaml-data -t users list
+yamldb -f ./yaml-data -t users create user1 --fields name=Alice,age=30
+yamldb -f ./yaml-data -t users get user1 --format json
+yamldb -f ./yaml-data -t projects create p1 --fields name=Core
 ```
 
 ### Query & Search
@@ -95,13 +162,16 @@ yamldb search --keyword alice --key name
 # Import
 yamldb import -i users.json
 yamldb import -i users.yaml
+yamldb -f ./yaml-data -t users import -i users.yaml
 
 # Export
 yamldb export -o backup.json
 yamldb export -o backup.yaml --format yaml
+yamldb -f ./yaml-data -t users export -o users.json
 
 # Backup
 yamldb backup -o backup.yaml
+yamldb -f ./yaml-data -t users backup -o users-backup.yaml
 ```
 
 ### Utility Commands
@@ -109,16 +179,34 @@ yamldb backup -o backup.yaml
 ```bash
 # Statistics
 yamldb stats
+yamldb -f ./yaml-data -t users stats
 
 # Count records
 yamldb count
+yamldb -f ./yaml-data -t users count
 
 # Check existence
 yamldb exists user1
+yamldb -f ./yaml-data -t users exists user1
 
 # Clear database
 yamldb clear --force
+yamldb -f ./yaml-data -t users clear --force
 ```
+
+### Web UI
+
+Start a local browser UI for the selected YAML file:
+
+```bash
+yamldb -f data.yaml webui
+yamldb -f /path/to/yaml-directory webui
+yamldb -f data.yaml webui --host 127.0.0.1 --port 8080
+```
+
+The Web UI uses the same source mapping as the ODBC/JDBC drivers. A single YAML file is shown as table `data`; a directory shows each `.yaml/.yml` file as a table named after the file stem. It exposes list, search, create/update, and delete actions for the selected table.
+
+It binds to `127.0.0.1:8080` by default and does not provide authentication, so keep it on localhost unless you put it behind your own access control.
 
 ## Rust API
 
@@ -336,14 +424,28 @@ db.export_yaml(Path::new("backup.yaml"))?;
 
 ## ODBC Driver
 
-YamlDB includes an ODBC driver for SQL-based access.
+YamlDB includes an ODBC driver for read-only SQL access from ODBC clients.
 
 ### Connection String
 
 ```
 DRIVER={YamlDB};DBQ=data.yaml;
 DRIVER={YamlDB};FILE=data.yaml;
+DRIVER={YamlDB};DBQ=/path/to/yaml-directory;
 ```
+
+When `DBQ`/`FILE` points to a single YAML file, query it as table `data`.
+When it points to a directory, each `.yaml` or `.yml` file is exposed as a table named after the file stem, for example `users.yaml` becomes table `users`.
+
+### Table Mapping
+
+| Source path | Tables | Example SQL |
+|-------------|--------|-------------|
+| `data.yaml` | `data` | `SELECT * FROM data` |
+| `users.yaml` | `data`, `users` | `SELECT * FROM users` |
+| `/path/to/yaml-directory` | one table per `.yaml/.yml` file | `SELECT * FROM users` |
+
+For directory sources, only files directly inside the selected directory are exposed. Nested directories are ignored.
 
 ### Supported SQL
 
@@ -364,7 +466,12 @@ SELECT * FROM data WHERE city != 'Shanghai'
 -- AND/OR conditions
 SELECT * FROM data WHERE city = 'Beijing' AND age >= 28
 SELECT * FROM data WHERE city = 'Beijing' OR city = 'Shanghai'
+
+-- Directory source
+SELECT * FROM users WHERE age >= 28
 ```
+
+Supported SQL is intentionally small: `SELECT * FROM <table>` with optional `WHERE` comparisons joined by `AND` or `OR`. Only `SELECT *` is supported; projected column lists, joins, grouping, ordering, inserts, updates, and deletes are not SQL features of the drivers. Use CLI or Web UI for writes.
 
 ### Build Shared Library
 
@@ -391,6 +498,21 @@ Add to `/etc/odbcinst.ini`:
 [YamlDB]
 Description=YamlDB ODBC Driver
 Driver=/path/to/libyamldb.so
+```
+
+### DBeaver / ODBC Clients
+
+Use the ODBC driver when your client supports native ODBC connections:
+
+1. Register the YamlDB ODBC shared library in the operating system ODBC manager.
+2. Create a DSN or connection with `DRIVER={YamlDB}`.
+3. Set `DBQ` or `FILE` to either a YAML file or a directory containing YAML files.
+4. Query `data` for a single file, or query a table named after a YAML file in a directory.
+
+Example directory DSN:
+
+```text
+DRIVER={YamlDB};DBQ=/home/alice/yaml-data;
 ```
 
 ### Usage Example (Python)
@@ -429,14 +551,38 @@ conn.Close();
 
 ## JDBC Driver
 
-YamlDB includes a dependency-free JDBC driver for SQL-based access from Java.
+YamlDB includes a lightweight JDBC driver for read-only SQL access from Java and tools such as DBeaver. The driver can use bundled `yq`, `-Dyamldb.yq=/path/to/yq`, `YAMLDB_YQ`, or `yq` from `PATH`.
 
 ### Connection URL
 
 ```text
 jdbc:yamldb:data.yaml
 jdbc:yamldb:file:data.yaml
+jdbc:yamldb:/path/to/yaml-directory
 ```
+
+For DBeaver and similar JDBC tools, choose the YamlDB JDBC jar and use one of the URLs above. A single YAML file is exposed as table `data`; a directory exposes every `.yaml`/`.yml` file as a table named after the file stem. The JDBC driver provides table and column metadata for browsing directory sources.
+
+### DBeaver Setup
+
+1. Build or download `yamldb-jdbc.jar`.
+2. In DBeaver, create a new Driver.
+3. Add `yamldb-jdbc.jar` to the driver libraries.
+4. Set the driver class to `io.github.markchenim.yamldb.jdbc.YamlDbJdbcDriver`.
+5. Set the URL template to `jdbc:yamldb:{file}` or enter a full JDBC URL manually.
+6. Use a JDBC URL such as `jdbc:yamldb:/home/alice/data.yaml` or `jdbc:yamldb:/home/alice/yaml-data`.
+7. If DBeaver cannot connect, make sure the DBeaver process can find `yq`, or set a JVM property such as `-Dyamldb.yq=/opt/yamldb/yq`.
+8. Test the connection, then browse tables or run SQL.
+
+For a directory source like:
+
+```text
+yaml-data/
+  users.yaml
+  teams.yml
+```
+
+the visible tables are `users` and `teams`.
 
 ### Supported SQL
 
@@ -448,7 +594,12 @@ SELECT * FROM data WHERE city = 'Beijing'
 SELECT * FROM data WHERE age >= 28
 SELECT * FROM data WHERE city = 'Beijing' AND age >= 28
 SELECT * FROM data WHERE city = 'Beijing' OR city = 'Shanghai'
+SELECT * FROM users WHERE age >= 28
 ```
+
+Nested YAML values such as arrays or objects are returned as JSON text through string getters.
+
+The JDBC driver is read-only and supports the same SQL limits as ODBC: `SELECT * FROM <table>` plus optional `WHERE` comparisons joined by `AND` or `OR`.
 
 ### Build JDBC Jar
 

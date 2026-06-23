@@ -5,6 +5,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -69,6 +70,9 @@ final class YamlDbJdbcProxies {
                 case "nativeSQL":
                     ensureOpen();
                     return args[0];
+                case "getMetaData":
+                    ensureOpen();
+                    return databaseMetaData((Connection) proxy, path);
                 case "getCatalog":
                 case "getSchema":
                     return null;
@@ -93,6 +97,107 @@ final class YamlDbJdbcProxies {
     private static Statement statement(Connection connection, Path path) {
         InvocationHandler handler = new StatementHandler(connection, path);
         return proxy(Statement.class, handler);
+    }
+
+    private static DatabaseMetaData databaseMetaData(Connection connection, Path path) {
+        InvocationHandler handler = new DatabaseMetaDataHandler(connection, path);
+        return proxy(DatabaseMetaData.class, handler);
+    }
+
+    private static final class DatabaseMetaDataHandler implements InvocationHandler {
+        private final Connection connection;
+        private final Path path;
+
+        private DatabaseMetaDataHandler(Connection connection, Path path) {
+            this.connection = connection;
+            this.path = path;
+        }
+
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            String name = method.getName();
+            switch (name) {
+                case "getConnection":
+                    return connection;
+                case "getDatabaseProductName":
+                    return "YamlDB";
+                case "getDatabaseProductVersion":
+                    return "0.10.0";
+                case "getDriverName":
+                    return "YamlDB JDBC Driver";
+                case "getDriverVersion":
+                    return "0.10.0";
+                case "getDriverMajorVersion":
+                    return 0;
+                case "getDriverMinorVersion":
+                    return 10;
+                case "supportsResultSetType":
+                    return (Integer) args[0] == ResultSet.TYPE_FORWARD_ONLY;
+                case "supportsResultSetConcurrency":
+                    return (Integer) args[0] == ResultSet.TYPE_FORWARD_ONLY
+                            && (Integer) args[1] == ResultSet.CONCUR_READ_ONLY;
+                case "isReadOnly":
+                    return true;
+                case "getTables":
+                    return tablesResult((String) args[2]);
+                case "getColumns":
+                    return columnsResult((String) args[2], (String) args[3]);
+                case "unwrap":
+                    return unwrap(proxy, args[0]);
+                case "isWrapperFor":
+                    return ((Class<?>) args[0]).isInstance(proxy);
+                case "toString":
+                    return "YamlDbDatabaseMetaData[" + path + "]";
+                default:
+                    return defaultValue(method);
+            }
+        }
+
+        private ResultSet tablesResult(String tablePattern) throws SQLException {
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (String table : YamlDbSql.tables(path)) {
+                if (!matchesPattern(table, tablePattern)) {
+                    continue;
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("TABLE_CAT", null);
+                row.put("TABLE_SCHEM", null);
+                row.put("TABLE_NAME", table);
+                row.put("TABLE_TYPE", "TABLE");
+                row.put("REMARKS", null);
+                rows.add(row);
+            }
+            return resultSet(table(rows), 0);
+        }
+
+        private ResultSet columnsResult(String tablePattern, String columnPattern) throws SQLException {
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (String table : YamlDbSql.tables(path)) {
+                if (!matchesPattern(table, tablePattern)) {
+                    continue;
+                }
+                YamlDbTable yamlTable = YamlDbSql.table(path, table);
+                int position = 1;
+                for (String column : yamlTable.columns()) {
+                    int type = inferSqlType(column, yamlTable.rows());
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("TABLE_CAT", null);
+                    row.put("TABLE_SCHEM", null);
+                    row.put("TABLE_NAME", table);
+                    row.put("COLUMN_NAME", column);
+                    row.put("DATA_TYPE", type);
+                    row.put("TYPE_NAME", sqlTypeName(type));
+                    row.put("COLUMN_SIZE", 0);
+                    row.put("NULLABLE", DatabaseMetaData.columnNullable);
+                    row.put("ORDINAL_POSITION", position++);
+                    row.put("IS_NULLABLE", "YES");
+                    if (matchesPattern(column, columnPattern)) {
+                        rows.add(row);
+                    }
+                }
+            }
+            return resultSet(table(rows), 0);
+        }
     }
 
     private static final class StatementHandler implements InvocationHandler {
@@ -353,28 +458,7 @@ final class YamlDbJdbcProxies {
         }
 
         private int sqlType(String column) {
-            for (Map<String, Object> row : rows) {
-                Object value = row.get(column);
-                if (value instanceof Integer || value instanceof Long) {
-                    return Types.BIGINT;
-                }
-                if (value instanceof Float || value instanceof Double) {
-                    return Types.DOUBLE;
-                }
-                if (value instanceof Boolean) {
-                    return Types.BOOLEAN;
-                }
-            }
-            return Types.VARCHAR;
-        }
-
-        private String sqlTypeName(int type) {
-            return switch (type) {
-                case Types.BIGINT -> "BIGINT";
-                case Types.DOUBLE -> "DOUBLE";
-                case Types.BOOLEAN -> "BOOLEAN";
-                default -> "VARCHAR";
-            };
+            return inferSqlType(column, rows);
         }
 
         private String columnClassName(String column) {
@@ -386,6 +470,66 @@ final class YamlDbJdbcProxies {
             }
             return String.class.getName();
         }
+    }
+
+    private static int inferSqlType(String column, List<Map<String, Object>> rows) {
+        for (Map<String, Object> row : rows) {
+            Object value = row.get(column);
+            if (value instanceof Integer || value instanceof Long) {
+                return Types.BIGINT;
+            }
+            if (value instanceof Float || value instanceof Double) {
+                return Types.DOUBLE;
+            }
+            if (value instanceof Boolean) {
+                return Types.BOOLEAN;
+            }
+        }
+        return Types.VARCHAR;
+    }
+
+    private static String sqlTypeName(int type) {
+        return switch (type) {
+            case Types.BIGINT -> "BIGINT";
+            case Types.DOUBLE -> "DOUBLE";
+            case Types.BOOLEAN -> "BOOLEAN";
+            default -> "VARCHAR";
+        };
+    }
+
+    private static boolean matchesPattern(String value, String pattern) {
+        if (pattern == null || pattern.isEmpty() || "%".equals(pattern)) {
+            return true;
+        }
+        String regex = pattern
+                .replace("\\", "\\\\")
+                .replace(".", "\\.")
+                .replace("%", ".*")
+                .replace("_", ".");
+        return value.matches("(?i)" + regex);
+    }
+
+    private static Object defaultValue(Method method) throws SQLFeatureNotSupportedException {
+        Class<?> type = method.getReturnType();
+        if (type == Boolean.TYPE) {
+            return false;
+        }
+        if (type == Integer.TYPE) {
+            return 0;
+        }
+        if (type == Long.TYPE) {
+            return 0L;
+        }
+        if (type == String.class) {
+            return "";
+        }
+        if (type == ResultSet.class) {
+            return resultSet(table(List.of()), 0);
+        }
+        if (type == Void.TYPE) {
+            return null;
+        }
+        throw unsupported(method);
     }
 
     static YamlDbTable table(List<Map<String, Object>> rows) {

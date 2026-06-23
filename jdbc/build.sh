@@ -11,7 +11,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$CLASSES_DIR" "$TEST_CLASSES_DIR"
 
 find "$ROOT/src/main/java" -name '*.java' -print0 | xargs -0 javac -encoding UTF-8 -d "$CLASSES_DIR"
-cp -R "$ROOT/src/main/resources/META-INF" "$CLASSES_DIR/"
+cp -R "$ROOT/src/main/resources/." "$CLASSES_DIR/"
 jar --create --file "$JAR_PATH" -C "$CLASSES_DIR" .
 
 find "$ROOT/src/test/java" -name '*.java' -print0 | xargs -0 javac -encoding UTF-8 -cp "$CLASSES_DIR" -d "$TEST_CLASSES_DIR"

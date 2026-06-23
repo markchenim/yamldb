@@ -2,6 +2,7 @@
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::Mutex;
 
@@ -20,7 +21,7 @@ pub const SQL_INTEGER: c_int = 4;
 pub const SQL_VARCHAR: c_int = 12;
 
 struct SqlDbcEntry {
-    db: Option<Mutex<YamlDb>>,
+    source: Option<PathBuf>,
 }
 
 struct SqlStmtEntry {
@@ -28,6 +29,11 @@ struct SqlStmtEntry {
     results: Vec<Record>,
     current_row: usize,
     columns: Vec<String>,
+}
+
+struct ParsedQuery {
+    table: String,
+    op: QueryOp,
 }
 
 lazy_static::lazy_static! {
@@ -59,44 +65,55 @@ fn parse_dsn(dsn: &str) -> Option<String> {
     None
 }
 
-fn parse_query(query: &str) -> Option<QueryOp> {
-    let q = query.trim();
+fn parse_query(query: &str) -> Option<ParsedQuery> {
+    let q = query.trim().trim_end_matches(';').trim();
     let lower = q.to_lowercase();
-    if !lower.starts_with("select") {
+    let where_idx = lower.find(" where ");
+    let select_part = where_idx.map_or(q, |idx| &q[..idx]);
+    let tokens: Vec<&str> = select_part.split_whitespace().collect();
+    if tokens.len() != 4
+        || !tokens[0].eq_ignore_ascii_case("select")
+        || tokens[1] != "*"
+        || !tokens[2].eq_ignore_ascii_case("from")
+    {
         return None;
     }
-    if !lower.contains("where") {
-        return Some(QueryOp::and(vec![]));
+    let table = unquote_ident(tokens[3])?;
+    let op = where_idx
+        .map(|idx| parse_condition(q[idx + 7..].trim()))
+        .unwrap_or_else(|| Some(QueryOp::and(vec![])))?;
+    Some(ParsedQuery { table, op })
+}
+
+fn unquote_ident(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
     }
-    let idx = lower.find("where").unwrap();
-    let cond_part = &q[idx + 5..];
-    parse_condition(cond_part.trim())
+    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        || (trimmed.starts_with('`') && trimmed.ends_with('`'))
+    {
+        return Some(trimmed[1..trimmed.len() - 1].to_string());
+    }
+    Some(trimmed.to_string())
 }
 
 fn parse_condition(cond: &str) -> Option<QueryOp> {
     let cond = cond.trim();
     let lower = cond.to_lowercase();
-    if lower.contains(" and ") {
-        let idx = lower.find(" and ").unwrap();
-        let left = &cond[..idx];
-        let right = &cond[idx + 5..];
-        let ops: Vec<QueryOp> = [left, right]
-            .iter()
-            .filter_map(|p| parse_cmp(p.trim()))
-            .collect();
-        Some(QueryOp::and(ops))
-    } else if lower.contains(" or ") {
-        let idx = lower.find(" or ").unwrap();
-        let left = &cond[..idx];
-        let right = &cond[idx + 4..];
-        let ops: Vec<QueryOp> = [left, right]
-            .iter()
-            .filter_map(|p| parse_cmp(p.trim()))
-            .collect();
-        Some(QueryOp::or(ops))
-    } else {
-        parse_cmp(cond)
+    if let Some(idx) = lower.find(" and ") {
+        return Some(QueryOp::and(vec![
+            parse_condition(&cond[..idx])?,
+            parse_condition(&cond[idx + 5..])?,
+        ]));
     }
+    if let Some(idx) = lower.find(" or ") {
+        return Some(QueryOp::or(vec![
+            parse_condition(&cond[..idx])?,
+            parse_condition(&cond[idx + 4..])?,
+        ]));
+    }
+    parse_cmp(cond)
 }
 
 fn parse_cmp(s: &str) -> Option<QueryOp> {
@@ -136,9 +153,147 @@ fn val_str(rec: &Record, col: &str) -> String {
             serde_yaml::Value::Number(n) => n.to_string(),
             serde_yaml::Value::Bool(b) => b.to_string(),
             serde_yaml::Value::Null => "NULL".to_string(),
-            _ => String::new(),
+            _ => serde_json::to_string(v).unwrap_or_default(),
         })
         .unwrap_or_default()
+}
+
+fn result_columns(records: &[Record]) -> Vec<String> {
+    let mut columns = std::collections::BTreeSet::new();
+    for record in records {
+        columns.extend(record.data.keys().cloned());
+    }
+    columns.into_iter().collect()
+}
+
+fn table_name(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_string())
+}
+
+fn is_yaml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml"))
+        .unwrap_or(false)
+}
+
+fn resolve_table_path(source: &Path, table: &str) -> Option<PathBuf> {
+    if source.is_file() {
+        let source_table = table_name(source)?;
+        if table.eq_ignore_ascii_case("data") || table.eq_ignore_ascii_case(&source_table) {
+            return Some(source.to_path_buf());
+        }
+        return None;
+    }
+
+    if !source.is_dir() {
+        return None;
+    }
+
+    for ext in ["yaml", "yml"] {
+        let path = source.join(format!("{table}.{ext}"));
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    std::fs::read_dir(source).ok()?.flatten().find_map(|entry| {
+        let path = entry.path();
+        if is_yaml_path(&path)
+            && table_name(&path)
+                .map(|name| name.eq_ignore_ascii_case(table))
+                .unwrap_or(false)
+        {
+            Some(path)
+        } else {
+            None
+        }
+    })
+}
+
+fn list_tables(source: &Path) -> Vec<String> {
+    if source.is_file() {
+        return vec!["data".to_string()];
+    }
+    if !source.is_dir() {
+        return Vec::new();
+    }
+    let mut tables: Vec<String> = std::fs::read_dir(source)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_yaml_path(path))
+        .filter_map(|path| table_name(&path))
+        .collect();
+    tables.sort_by_key(|name| name.to_lowercase());
+    tables
+}
+
+fn matches_pattern(value: &str, pattern: Option<&str>) -> bool {
+    let Some(pattern) = pattern else {
+        return true;
+    };
+    if pattern.is_empty() || pattern == "%" {
+        return true;
+    }
+    pattern_match(value.as_bytes(), pattern.as_bytes())
+}
+
+fn pattern_match(value: &[u8], pattern: &[u8]) -> bool {
+    if pattern.is_empty() {
+        return value.is_empty();
+    }
+    match pattern[0] {
+        b'%' => {
+            pattern_match(value, &pattern[1..])
+                || (!value.is_empty() && pattern_match(&value[1..], pattern))
+        }
+        b'_' => !value.is_empty() && pattern_match(&value[1..], &pattern[1..]),
+        ch => {
+            !value.is_empty()
+                && value[0].eq_ignore_ascii_case(&ch)
+                && pattern_match(&value[1..], &pattern[1..])
+        }
+    }
+}
+
+fn source_for_statement(statement_handle: *mut c_void) -> Option<PathBuf> {
+    if statement_handle.is_null() {
+        return None;
+    }
+    let stmt_id = (statement_handle as usize).saturating_sub(1);
+    let dbc_id = {
+        let sv = STMT_STORE.lock().unwrap();
+        sv.get(stmt_id).and_then(|e| e.as_ref())?.dbc_id
+    };
+    let dv = DBC_STORE.lock().unwrap();
+    dv.get(dbc_id)
+        .and_then(|e| e.as_ref())
+        .and_then(|entry| entry.source.clone())
+}
+
+fn set_statement_results(
+    statement_handle: *mut c_void,
+    records: Vec<Record>,
+    columns: Vec<String>,
+) -> c_int {
+    if statement_handle.is_null() {
+        return SQL_ERROR;
+    }
+    let stmt_id = (statement_handle as usize).saturating_sub(1);
+    let mut sv = STMT_STORE.lock().unwrap();
+    if let Some(stmt) = sv.get_mut(stmt_id).and_then(|e| e.as_mut()) {
+        stmt.results = records;
+        stmt.current_row = 0;
+        stmt.columns = columns;
+        SQL_SUCCESS
+    } else {
+        SQL_ERROR
+    }
 }
 
 unsafe fn cstr_to_str<'a>(p: *const c_char) -> Result<&'a str, ()> {
@@ -170,7 +325,7 @@ pub unsafe extern "C" fn SQLAllocHandle(
                 SQL_SUCCESS
             }
             SQL_HANDLE_DBC => {
-                let id = slot_alloc(&DBC_STORE, SqlDbcEntry { db: None });
+                let id = slot_alloc(&DBC_STORE, SqlDbcEntry { source: None });
                 *output_handle = (id + 1) as *mut c_void;
                 SQL_SUCCESS
             }
@@ -242,14 +397,12 @@ pub unsafe extern "C" fn SQLConnect(
             Some(e) => e,
             None => return SQL_ERROR,
         };
-        let mut db = YamlDb::new(&path);
-        match db.load() {
-            Ok(_) => {
-                entry.db = Some(Mutex::new(db));
-                SQL_SUCCESS
-            }
-            Err(_) => SQL_ERROR,
+        let source = PathBuf::from(path);
+        if !source.exists() {
+            return SQL_ERROR;
         }
+        entry.source = Some(source);
+        SQL_SUCCESS
     }
 }
 
@@ -262,7 +415,7 @@ pub unsafe extern "C" fn SQLDisconnect(connection_handle: *mut c_void) -> c_int 
     let mut v = DBC_STORE.lock().unwrap();
     match v.get_mut(id).and_then(|e| e.as_mut()) {
         Some(entry) => {
-            entry.db = None;
+            entry.source = None;
             SQL_SUCCESS
         }
         None => SQL_ERROR,
@@ -286,8 +439,8 @@ pub unsafe extern "C" fn SQLExecDirect(
 
         let stmt_id = (statement_handle as usize).saturating_sub(1);
 
-        let query_op = match parse_query(query) {
-            Some(op) => op,
+        let parsed_query = match parse_query(query) {
+            Some(query) => query,
             None => return SQL_ERROR,
         };
 
@@ -299,32 +452,34 @@ pub unsafe extern "C" fn SQLExecDirect(
             }
         };
 
-        let records = {
+        let path = {
             let dv = DBC_STORE.lock().unwrap();
             let entry = match dv.get(dbc_id).and_then(|e| e.as_ref()) {
                 Some(e) => e,
                 None => return SQL_ERROR,
             };
-            let db = match &entry.db {
-                Some(db) => db,
+            let source = match &entry.source {
+                Some(source) => source,
                 None => return SQL_ERROR,
             };
-            let db = db.lock().unwrap();
-            let result = db.query(&query_op);
-            result
-                .to_vec()
-                .into_iter()
-                .cloned()
-                .collect::<Vec<Record>>()
+            match resolve_table_path(source, &parsed_query.table) {
+                Some(path) => path,
+                None => return SQL_ERROR,
+            }
         };
 
-        let columns = if let Some(first) = records.first() {
-            let mut cols: Vec<String> = first.data.keys().cloned().collect();
-            cols.sort();
-            cols
-        } else {
-            Vec::new()
-        };
+        let mut db = YamlDb::new(path);
+        if db.load().is_err() {
+            return SQL_ERROR;
+        }
+        let records = db
+            .query(&parsed_query.op)
+            .to_vec()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<Record>>();
+
+        let columns = result_columns(&records);
 
         let mut sv = STMT_STORE.lock().unwrap();
         if let Some(stmt) = sv.get_mut(stmt_id).and_then(|e| e.as_mut()) {
@@ -499,5 +654,113 @@ pub unsafe extern "C" fn SQLColAttribute(
             *numeric_attribute = 256;
         }
         SQL_SUCCESS
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SQLTables(
+    statement_handle: *mut c_void,
+    _catalog_name: *const c_char,
+    _name_length1: c_int,
+    _schema_name: *const c_char,
+    _name_length2: c_int,
+    table_name: *const c_char,
+    _name_length3: c_int,
+    _table_type: *const c_char,
+    _name_length4: c_int,
+) -> c_int {
+    unsafe {
+        let source = match source_for_statement(statement_handle) {
+            Some(source) => source,
+            None => return SQL_ERROR,
+        };
+        let table_pattern = if table_name.is_null() {
+            None
+        } else {
+            cstr_to_str(table_name).ok()
+        };
+        let records = list_tables(&source)
+            .into_iter()
+            .filter(|table| matches_pattern(table, table_pattern))
+            .map(|table| {
+                let mut record = Record::new(table.clone());
+                record.set("TABLE_NAME", table);
+                record.set("TABLE_TYPE", "TABLE");
+                record
+            })
+            .collect();
+        set_statement_results(
+            statement_handle,
+            records,
+            vec!["TABLE_NAME".to_string(), "TABLE_TYPE".to_string()],
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SQLColumns(
+    statement_handle: *mut c_void,
+    _catalog_name: *const c_char,
+    _name_length1: c_int,
+    _schema_name: *const c_char,
+    _name_length2: c_int,
+    table_name: *const c_char,
+    _name_length3: c_int,
+    column_name: *const c_char,
+    _name_length4: c_int,
+) -> c_int {
+    unsafe {
+        let source = match source_for_statement(statement_handle) {
+            Some(source) => source,
+            None => return SQL_ERROR,
+        };
+        let table_pattern = if table_name.is_null() {
+            None
+        } else {
+            cstr_to_str(table_name).ok()
+        };
+        let column_pattern = if column_name.is_null() {
+            None
+        } else {
+            cstr_to_str(column_name).ok()
+        };
+
+        let mut records = Vec::new();
+        for table in list_tables(&source)
+            .into_iter()
+            .filter(|table| matches_pattern(table, table_pattern))
+        {
+            let Some(path) = resolve_table_path(&source, &table) else {
+                continue;
+            };
+            let mut db = YamlDb::new(path);
+            if db.load().is_err() {
+                continue;
+            }
+            let rows = db.read_all().into_iter().cloned().collect::<Vec<Record>>();
+            for (index, column) in result_columns(&rows)
+                .into_iter()
+                .filter(|column| matches_pattern(column, column_pattern))
+                .enumerate()
+            {
+                let mut record = Record::new(format!("{table}.{column}"));
+                record.set("TABLE_NAME", table.clone());
+                record.set("COLUMN_NAME", column);
+                record.set("TYPE_NAME", "VARCHAR");
+                record.set("ORDINAL_POSITION", (index + 1) as i64);
+                records.push(record);
+            }
+        }
+
+        set_statement_results(
+            statement_handle,
+            records,
+            vec![
+                "TABLE_NAME".to_string(),
+                "COLUMN_NAME".to_string(),
+                "TYPE_NAME".to_string(),
+                "ORDINAL_POSITION".to_string(),
+            ],
+        )
     }
 }

@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Force $ClassesDir, $TestClassesDir | Out-Null
 $Sources = Get-ChildItem -Path (Join-Path $Root "src/main/java") -Recurse -Filter *.java | ForEach-Object { $_.FullName }
 javac -encoding UTF-8 -d $ClassesDir $Sources
 
-Copy-Item -Recurse -Force (Join-Path $Root "src/main/resources/META-INF") $ClassesDir
+Copy-Item -Recurse -Force (Join-Path $Root "src/main/resources/*") $ClassesDir
 jar --create --file $JarPath -C $ClassesDir .
 
 $TestSources = Get-ChildItem -Path (Join-Path $Root "src/test/java") -Recurse -Filter *.java | ForEach-Object { $_.FullName }

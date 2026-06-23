@@ -22,6 +22,28 @@ YamlDB 是一个轻量级 YAML 文件数据库，提供命令行工具、Rust AP
 
 ## 安装
 
+YamlDB 使用 `yq` v4 解析和格式化 YAML 文件。发布包可以内置 `yq`；如果未内置，请安装 `yq` 命令，并确保它在 `PATH` 中。
+
+示例：
+
+```bash
+# macOS
+brew install yq
+
+# 使用 Linux Homebrew
+brew install yq
+
+# 也可以从 https://github.com/mikefarah/yq 下载 yq v4 二进制文件
+yq --version
+```
+
+`yq` 查找顺序：
+
+1. `YAMLDB_YQ` 环境变量。
+2. CLI/ODBC 驱动同目录下的 `yq`，或同目录 `bin/` 下的 `yq`。
+3. JDBC JAR 内置资源 `bin/<os>-<arch>/yq`，例如 `bin/linux-amd64/yq`。
+4. `PATH` 中的 `yq` 或 `yq.exe`。
+
 ### 通过 Cargo 安装
 
 ```bash
@@ -38,34 +60,79 @@ cargo install yamldb
 | Windows | `yamldb-windows.exe` | `yamldb-windows-odbc.dll` | `yamldb-jdbc.jar` |
 | macOS | `yamldb-macos` | `libyamldb-macos-odbc.dylib` | `yamldb-jdbc.jar` |
 
+## 数据源与表
+
+YamlDB 在 CLI、Web UI、ODBC 和 JDBC 中使用一致的数据源映射。
+
+| 数据源 | 表名 | 说明 |
+| ------ | ---- | ---- |
+| 单个 YAML 文件，例如 `data.yaml` | `data`；SQL 驱动也接受文件名表，例如 `data` | CLI 默认使用 `data` |
+| 目录，例如 `./yaml-data` | 当前目录下每个 `.yaml/.yml` 文件一张表 | `users.yaml` 对应表 `users` |
+
+目录数据源不递归扫描子目录。表文件需要直接放在所选目录下：
+
+```text
+yaml-data/
+  users.yaml
+  teams.yml
+  projects.yaml
+```
+
+等价访问方式：
+
+```bash
+# CLI
+yamldb -f ./yaml-data -t users list
+
+# Web UI
+yamldb -f ./yaml-data webui
+```
+
+```sql
+-- ODBC/JDBC
+SELECT * FROM users
+```
+
+通过 CLI 或 Web UI 写入目录数据源时，如果表不存在，会创建为 `<table>.yaml`。
+
+### 能力对照
+
+| 入口 | 单文件 | 目录多表 | 写入支持 | 表元数据 |
+| ---- | ------ | -------- | -------- | -------- |
+| CLI | 支持 | 支持，通过 `--table` 选择 | 支持 | `tables` 命令 |
+| Web UI | 支持 | 支持，界面中选择表 | 支持 | 表选择器 |
+| ODBC | 支持 | 支持，`SELECT * FROM <table>` | 只读 | `SQLTables` / `SQLColumns` |
+| JDBC | 支持 | 支持，`SELECT * FROM <table>` | 只读 | `DatabaseMetaData` |
+
 ## CLI 用法
 
 ### 全局参数
 
 ```text
 -f, --file <FILE>  指定 YAML 数据文件路径，默认 data.yaml
+-t, --table <TABLE>  当 --file 指向 YAML 目录时选择表，默认 data
 ```
+
+`--table` 是全局参数，可放在子命令前后。
 
 ### 记录操作
 
 ```bash
-# 创建记录
+# 单文件数据源
 yamldb create user1 --fields name=Alice,age=30,city=Beijing
-
-# 读取记录
 yamldb get user1
-yamldb get user1 --format json
-
-# 列出记录
 yamldb list
 yamldb list --limit 10
 yamldb list --format json
-
-# 更新记录
 yamldb update user1 --fields age=31,city=Guangzhou
-
-# 删除记录
 yamldb delete user1
+
+# 目录数据源
+yamldb -f ./yaml-data tables
+yamldb -f ./yaml-data -t users list
+yamldb -f ./yaml-data -t users create user1 --fields name=Alice,age=30
+yamldb -f ./yaml-data -t users get user1 --format json
+yamldb -f ./yaml-data -t projects create p1 --fields name=Core
 ```
 
 ### 查询与搜索
@@ -95,13 +162,16 @@ yamldb search --keyword alice --key name
 # 导入
 yamldb import -i users.json
 yamldb import -i users.yaml
+yamldb -f ./yaml-data -t users import -i users.yaml
 
 # 导出
 yamldb export -o backup.json
 yamldb export -o backup.yaml --format yaml
+yamldb -f ./yaml-data -t users export -o users.json
 
 # 备份
 yamldb backup -o backup.yaml
+yamldb -f ./yaml-data -t users backup -o users-backup.yaml
 ```
 
 ### 工具命令
@@ -109,16 +179,34 @@ yamldb backup -o backup.yaml
 ```bash
 # 统计信息
 yamldb stats
+yamldb -f ./yaml-data -t users stats
 
 # 记录数量
 yamldb count
+yamldb -f ./yaml-data -t users count
 
 # 检查记录是否存在
 yamldb exists user1
+yamldb -f ./yaml-data -t users exists user1
 
 # 清空数据库
 yamldb clear --force
+yamldb -f ./yaml-data -t users clear --force
 ```
+
+### Web UI
+
+为当前 YAML 文件启动本地浏览器管理界面：
+
+```bash
+yamldb -f data.yaml webui
+yamldb -f /path/to/yaml-directory webui
+yamldb -f data.yaml webui --host 127.0.0.1 --port 8080
+```
+
+Web UI 使用和 ODBC/JDBC 驱动一致的数据源映射。单个 YAML 文件显示为 `data` 表；目录会把每个 `.yaml/.yml` 文件显示为一张表，表名为文件名去掉扩展名。Web UI 支持对当前选中表进行列表、搜索、新建/更新和删除记录。
+
+默认监听 `127.0.0.1:8080`，不提供内置认证；除非自行加访问控制，否则不要绑定到公网地址。
 
 ## Rust API
 
@@ -302,14 +390,27 @@ db.export_yaml(Path::new("backup.yaml"))?;
 
 ## ODBC 驱动
 
-YamlDB 提供 ODBC 驱动，可用简单 SQL 读取 YAML 数据。
+YamlDB 提供 ODBC 驱动，可供 ODBC 客户端通过只读 SQL 访问 YAML 数据。
 
 ### 连接字符串
 
 ```text
 DRIVER={YamlDB};DBQ=data.yaml;
 DRIVER={YamlDB};FILE=data.yaml;
+DRIVER={YamlDB};DBQ=/path/to/yaml-directory;
 ```
+
+当 `DBQ`/`FILE` 指向单个 YAML 文件时，使用表名 `data` 查询。指向目录时，每个 `.yaml` 或 `.yml` 文件会作为一张表，表名为文件名去掉扩展名，例如 `users.yaml` 对应表 `users`。
+
+### 表映射规则
+
+| 数据源路径 | 暴露的表 | SQL 示例 |
+| ---------- | -------- | -------- |
+| `data.yaml` | `data` | `SELECT * FROM data` |
+| `users.yaml` | `data`、`users` | `SELECT * FROM users` |
+| `/path/to/yaml-directory` | 每个 `.yaml/.yml` 文件一张表 | `SELECT * FROM users` |
+
+目录数据源只扫描当前目录下的 YAML 文件，不递归扫描子目录。
 
 ### 支持的 SQL
 
@@ -323,7 +424,10 @@ SELECT * FROM data WHERE age <= 25
 SELECT * FROM data WHERE city != 'Shanghai'
 SELECT * FROM data WHERE city = 'Beijing' AND age >= 28
 SELECT * FROM data WHERE city = 'Beijing' OR city = 'Shanghai'
+SELECT * FROM users WHERE age >= 28
 ```
+
+SQL 支持范围是有意保持很小的只读子集：`SELECT * FROM <table>`，可选 `WHERE` 条件，条件支持比较操作并可用 `AND` 或 `OR` 连接。驱动只支持 `SELECT *`；不支持选择部分列、join、group by、order by、insert、update、delete。写入请使用 CLI 或 Web UI。
 
 ### 构建共享库
 
@@ -354,6 +458,21 @@ Linux：
 [YamlDB]
 Description=YamlDB ODBC Driver
 Driver=/path/to/libyamldb.so
+```
+
+### DBeaver / ODBC 客户端
+
+当客户端支持原生 ODBC 连接时，可以使用 ODBC 驱动：
+
+1. 先在系统 ODBC 管理器中注册 YamlDB ODBC 共享库。
+2. 创建 DSN 或连接，驱动使用 `DRIVER={YamlDB}`。
+3. 将 `DBQ` 或 `FILE` 设置为单个 YAML 文件，或包含多个 YAML 文件的目录。
+4. 单文件数据源查询 `data` 表；目录数据源查询对应文件名的表。
+
+目录 DSN 示例：
+
+```text
+DRIVER={YamlDB};DBQ=/home/alice/yaml-data;
 ```
 
 ### Python 示例
@@ -392,14 +511,38 @@ conn.Close();
 
 ## JDBC 驱动
 
-YamlDB 提供一个无外部依赖的 JDBC 驱动，可供 Java 通过 SQL 读取 YAML 数据。
+YamlDB 提供轻量级 JDBC 驱动，可供 Java 和 DBeaver 等工具通过只读 SQL 访问 YAML 数据。驱动可使用内置 `yq`、`-Dyamldb.yq=/path/to/yq`、`YAMLDB_YQ`，或 `PATH` 中的 `yq`。
 
 ### 连接 URL
 
 ```text
 jdbc:yamldb:data.yaml
 jdbc:yamldb:file:data.yaml
+jdbc:yamldb:/path/to/yaml-directory
 ```
+
+在 DBeaver 等 JDBC 工具中，选择 YamlDB JDBC jar，并使用上面的 URL。单个 YAML 文件暴露为 `data` 表；目录会把每个 `.yaml`/`.yml` 文件暴露为一张表。JDBC 驱动提供表和列元数据，便于在工具中浏览目录数据源。
+
+### DBeaver 配置
+
+1. 构建或下载 `yamldb-jdbc.jar`。
+2. 在 DBeaver 中创建新的 Driver。
+3. 将 `yamldb-jdbc.jar` 添加到驱动库。
+4. Driver class 填写 `io.github.markchenim.yamldb.jdbc.YamlDbJdbcDriver`。
+5. URL template 可填写 `jdbc:yamldb:{file}`，也可以手动输入完整 JDBC URL。
+6. JDBC URL 填写 `jdbc:yamldb:/home/alice/data.yaml` 或 `jdbc:yamldb:/home/alice/yaml-data`。
+7. 如果 DBeaver 无法连接，确认 DBeaver 进程能找到 `yq`，或设置 JVM 参数，例如 `-Dyamldb.yq=/opt/yamldb/yq`。
+8. 测试连接后，即可浏览表或执行 SQL。
+
+如果目录结构如下：
+
+```text
+yaml-data/
+  users.yaml
+  teams.yml
+```
+
+可见表为 `users` 和 `teams`。
 
 ### 支持的 SQL
 
@@ -411,7 +554,12 @@ SELECT * FROM data WHERE city = 'Beijing'
 SELECT * FROM data WHERE age >= 28
 SELECT * FROM data WHERE city = 'Beijing' AND age >= 28
 SELECT * FROM data WHERE city = 'Beijing' OR city = 'Shanghai'
+SELECT * FROM users WHERE age >= 28
 ```
+
+YAML 中的数组、对象等嵌套值会通过字符串读取接口以 JSON 文本返回。
+
+JDBC 驱动是只读的，SQL 限制和 ODBC 一致：`SELECT * FROM <table>`，可选 `WHERE` 比较条件，并可用 `AND` 或 `OR` 连接。
 
 ### 构建 JDBC Jar
 

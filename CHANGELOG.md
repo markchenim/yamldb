@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-06-23
+
+### Added
+- Web UI exposed from the CLI with local record browsing, search, create/update, and delete support.
+- Directory data sources across CLI, Web UI, ODBC, and JDBC, where each `.yaml` or `.yml` file is exposed as a table.
+- CLI `--table` option and `tables` command for selecting and listing directory-backed YAML tables.
+- ODBC table and column metadata support for directory-backed sources.
+- JDBC table and column metadata support for DBeaver and similar tools.
+- Bundled `yq` lookup support for CLI/ODBC and JDBC, with `YAMLDB_YQ` and `yamldb.yq` overrides.
+
+### Changed
+- YAML parsing and formatting now goes through `yq` while preserving the existing Rust API value types.
+- JDBC YAML loading now uses `yq` instead of line-oriented parsing.
+- ODBC/JDBC SQL handling now supports `SELECT * FROM <table>` for directory sources and rejects unsupported select shapes more strictly.
+- Documentation now covers DBeaver setup, table mapping, Web UI usage, `yq` lookup, and CLI directory workflows.
+
 ## [0.9.0] - 2026-06-16
 
 ### Added

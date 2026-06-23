@@ -20,6 +20,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Install yq
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v4.52.4
+          os=linux
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            os=darwin
+          fi
+          arch=amd64
+          if [ "$(uname -m)" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then
+            arch=arm64
+          fi
+          sudo curl -L "https://github.com/mikefarah/yq/releases/download/${version}/yq_${os}_${arch}" -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+      - name: Install yq
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "v4.52.4"
+          $path = Join-Path $env:RUNNER_TEMP "yq.exe"
+          Invoke-WebRequest "https://github.com/mikefarah/yq/releases/download/$version/yq_windows_amd64.exe" -OutFile $path
+          Add-Content $env:GITHUB_PATH $env:RUNNER_TEMP
+          & $path --version
       - run: cargo fmt --check
       - run: cargo test --verbose
       - run: cargo clippy -- -D warnings
@@ -32,4 +58,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Install yq
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v4.52.4
+          sudo curl -L "https://github.com/mikefarah/yq/releases/download/${version}/yq_linux_amd64" -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
       - run: bash jdbc/build.sh
